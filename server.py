@@ -417,6 +417,42 @@ def fetch_url(url: str) -> str:
     if not url:
         raise Exception("url is required")
 
+    # 1. First, attempt to let Open WebUI's native web loader fetch it (bypasses bot protection for sites like Reuters)
+    try:
+        owui_resp = client.post(
+            "/api/v1/retrieval/process/url",
+            params={"process": "false"},
+            json={"url": url},
+            timeout=120.0
+        )
+        if owui_resp.get("type") in ("web", "youtube") and owui_resp.get("content"):
+            text = owui_resp.get("content")
+            
+            try:
+                import tiktoken
+                encoding = tiktoken.get_encoding("cl100k_base")
+                token_count = len(encoding.encode(text, disallowed_special=()))
+            except ImportError:
+                token_count = len(text) // 4
+                
+            if token_count > 8000:
+                return json.dumps({
+                    "ok": False,
+                    "error": f"Document is too large to read directly ({token_count} tokens).",
+                    "hint": "Please use `process_web_url` to add this directly to the RAG database."
+                }, ensure_ascii=False)
+                
+            return json.dumps({
+                "ok": True,
+                "url": url,
+                "token_count": token_count,
+                "content": text[:30000]
+            }, ensure_ascii=False)
+    except Exception as e:
+        # If it fails or it's a file, we fall back to local download
+        pass
+
+    # 2. Fallback for PDFs or if Open WebUI native fetch failed
     tmp_path, filename, size, ctype = download_to_disk(url)
     try:
         mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
