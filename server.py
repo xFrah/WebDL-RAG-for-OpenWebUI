@@ -297,9 +297,12 @@ def process_web_url(url: str) -> str:
 def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = []) -> str:
     """Perform a pure semantic search on the Open WebUI vector database.
     
-    Returns the raw text chunks matching the query. Bypasses the internal LLM completely,
-    saving tokens and time. Use this when you want to read the raw context yourself instead
-    of having it summarized.
+    Returns the raw text chunks matching the query. Bypasses the internal LLM completely.
+    
+    CRITICAL: Open WebUI uses strict semantic distance thresholds. 
+    DO NOT use keyword dumps (e.g. "embedding.py retrieval.py backend").
+    YOU MUST write full, descriptive, natural language sentences (e.g. "What files handle the retrieval backend and embeddings?").
+    If you use keywords, it will return 0 chunks.
     """
     if not query:
         raise Exception("query is required")
@@ -311,7 +314,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
     try:
         # Search individual files
         for file_id in file_ids:
-            payload = {"query": query, "collection_name": file_id}
+            payload = {"query": query, "collection_name": file_id, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
             chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
             if chunks and isinstance(chunks[0], list):
@@ -320,7 +323,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             
         # Search collections
         if collection_names:
-            payload = {"query": query, "collection_names": collection_names}
+            payload = {"query": query, "collection_names": collection_names, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
             chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
             if chunks and isinstance(chunks[0], list):
