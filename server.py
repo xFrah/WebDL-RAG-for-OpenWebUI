@@ -665,8 +665,8 @@ def grep_file(file_id: str, query: str, is_regex: bool = False, ignore_case: boo
         
     try:
         # Fetch the extracted text content from Open WebUI
-        # This endpoint returns the raw string content of the file
-        content = client.get(f"/api/v1/files/{file_id}/content")
+        # /data/content returns the extracted text, while /content returns the raw binary file
+        content = client.get(f"/api/v1/files/{file_id}/data/content")
         
         if not content:
             return json.dumps({"ok": False, "error": f"File {file_id} not found or has no extracted text content."})
