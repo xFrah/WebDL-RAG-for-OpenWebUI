@@ -470,6 +470,24 @@ def search_web(query: str) -> str:
         ensure_ascii=False,
     )
 
+def format_json_for_rag(data):
+    """Flattens JSON into a Markdown-friendly format for better semantic chunking."""
+    if isinstance(data, list):
+        return "\n\n".join([format_json_for_rag(item) for item in data])
+    if isinstance(data, dict):
+        lines = []
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                sub_str = json.dumps(v, ensure_ascii=False)
+                if len(sub_str) < 150:
+                    lines.append(f"{k}: {sub_str}")
+                else:
+                    lines.append(f"### {k}")
+                    lines.append(format_json_for_rag(v))
+            else:
+                lines.append(f"{k}: {v}")
+        return "\n".join(lines)
+    return str(data)
 
 @mcp.tool()
 def fetch_url(url: str) -> str:
@@ -490,6 +508,17 @@ def fetch_url(url: str) -> str:
         )
         if owui_resp.get("type") in ("web", "youtube") and owui_resp.get("content"):
             text = owui_resp.get("content")
+            
+            # Detect JSON and format it
+            if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
+                try:
+                    data = json.loads(text)
+                    text = format_json_for_rag(data)
+                    # If it's huge, force fallback to local file upload so we can upload the markdown
+                    if len(text) // 4 > 8000:
+                        raise Exception("JSON detected and formatted. Falling back to local upload.")
+                except Exception as e:
+                    if "JSON detected" in str(e): raise e
             
             try:
                 import tiktoken
@@ -576,6 +605,19 @@ def fetch_url(url: str) -> str:
             try:
                 with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read()
+                    
+                if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
+                    try:
+                        data = json.loads(text)
+                        text = format_json_for_rag(data)
+                        # Overwrite tmp_path with markdown so it gets indexed cleanly
+                        with open(tmp_path, "w", encoding="utf-8") as f:
+                            f.write(text)
+                        if not filename.endswith(".md"):
+                            filename = filename + ".md"
+                        mime = "text/markdown"
+                    except Exception:
+                        pass
             except Exception:
                 text = ""
 
