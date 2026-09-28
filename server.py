@@ -118,20 +118,22 @@ def extract_filename(url: str) -> str:
     return name
 
 
-def download_to_disk(url: str) -> tuple[str, str, int]:
-    """Stream a URL to a temp file. Returns (path, filename, size_bytes)."""
+def download_to_disk(url: str) -> tuple[str, str, int, str]:
+    """Stream a URL to a temp file. Returns (path, filename, size_bytes, content_type)."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise Exception(f"Only http/https URLs are supported, got: {url}")
     filename = extract_filename(url)
     fd, tmp_path = tempfile.mkstemp(prefix="owui-kb-", suffix=os.path.splitext(filename)[1] or ".bin")
     os.close(fd)
-    headers = {"User-Agent": "openwebui-kb-mcp/1.0 (+https://github.com/open-webui/open-webui)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     size = 0
+    content_type = ""
     with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(30.0, read=600.0)) as http:
         with http.stream("GET", url, headers=headers) as resp:
             if resp.status_code >= 400:
                 raise Exception(f"Download failed with HTTP {resp.status_code} for {url}")
+            content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
             for chunk in resp.iter_bytes(1024 * 256):
                 size += len(chunk)
                 if size > MAX_FILE_BYTES:
@@ -142,7 +144,7 @@ def download_to_disk(url: str) -> tuple[str, str, int]:
                     fh.write(chunk)
     if size == 0:
         raise Exception(f"Download of {url} produced an empty file.")
-    return tmp_path, filename, size
+    return tmp_path, filename, size, content_type
 
 
 def wait_for_file_processing(file_id: str, timeout: int | None = None) -> dict[str, Any]:
@@ -217,14 +219,14 @@ def download_file(url: str, wait: bool = True) -> str:
     if not url:
         raise Exception("url is required")
 
-    tmp_path, filename, size = download_to_disk(url)
+    tmp_path, filename, size, ctype = download_to_disk(url)
     try:
         metadata = {
             "process": True,
             "source": "openwebui-mcp",
             "source_url": url,
         }
-        mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         with open(tmp_path, "rb") as fh:
             payload = client.post(
                 "/api/v1/files/",
@@ -415,9 +417,9 @@ def fetch_url(url: str) -> str:
     if not url:
         raise Exception("url is required")
 
-    tmp_path, filename, size = download_to_disk(url)
+    tmp_path, filename, size, ctype = download_to_disk(url)
     try:
-        mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         text = ""
 
         if mime == "application/pdf":
@@ -435,6 +437,8 @@ def fetch_url(url: str) -> str:
                 from bs4 import BeautifulSoup
                 with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
                     soup = BeautifulSoup(f.read(), "html.parser")
+                    for script in soup(["script", "style"]):
+                        script.decompose()
                     text = soup.get_text(separator="\n", strip=True)
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Failed to parse HTML: {e}"})
