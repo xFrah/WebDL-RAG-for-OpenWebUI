@@ -381,7 +381,7 @@ def search_web(query: str) -> str:
         "format": "json"
     }
     try:
-        with httpx.Client(timeout=30.0) as http:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as http:
             resp = http.get(searxng_url, params=params)
             resp.raise_for_status()
             data = resp.json()
