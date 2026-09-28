@@ -322,29 +322,64 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
             if resp is None:
                 continue
-            chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
-            if chunks and isinstance(chunks[0], list):
-                chunks = chunks[0]
-            all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
+                
+            docs = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+            metas = resp.get("metadatas", [])
+            dists = resp.get("distances", [])
+            
+            if docs and isinstance(docs[0], list): docs = docs[0]
+            if metas and isinstance(metas[0], list): metas = metas[0]
+            if dists and isinstance(dists[0], list): dists = dists[0]
+            
+            for idx, doc in enumerate(docs):
+                if not doc or str(doc).strip() == "[]": continue
+                meta = metas[idx] if idx < len(metas) else {}
+                dist = dists[idx] if idx < len(dists) else "N/A"
+                all_chunks.append({"text": doc, "meta": meta, "dist": dist})
             
         # Search collections
         if collection_names:
             payload = {"query": query, "collection_names": collection_names, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
             if resp is not None:
-                chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
-                if chunks and isinstance(chunks[0], list):
-                    chunks = chunks[0]
-                all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
+                docs = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+                metas = resp.get("metadatas", [])
+                dists = resp.get("distances", [])
+                
+                if docs and isinstance(docs[0], list): docs = docs[0]
+                if metas and isinstance(metas[0], list): metas = metas[0]
+                if dists and isinstance(dists[0], list): dists = dists[0]
+                
+                for idx, doc in enumerate(docs):
+                    if not doc or str(doc).strip() == "[]": continue
+                    meta = metas[idx] if idx < len(metas) else {}
+                    dist = dists[idx] if idx < len(dists) else "N/A"
+                    all_chunks.append({"text": doc, "meta": meta, "dist": dist})
             
         # Format chunks safely to prevent token explosion
         results = []
         for i, chunk in enumerate(all_chunks[:10]):  # Limit to top 10 chunks
-            if isinstance(chunk, dict):
-                text = chunk.get("document", chunk.get("content", str(chunk)))
+            if isinstance(chunk, dict) and "text" in chunk:
+                # New format with metadata
+                text = chunk["text"]
+                if isinstance(text, dict):
+                    text = text.get("document", text.get("content", str(text)))
+                else:
+                    text = str(text)
+                meta = chunk["meta"]
+                source = meta.get("source", "Unknown")
+                loc = meta.get("loc", "")
+                if loc: source += f" ({loc})"
+                dist = chunk.get("dist", "N/A")
+                if isinstance(dist, float): dist = round(dist, 4)
+                results.append(f"--- Chunk {i+1} (Source: {source} | Distance: {dist}) ---\n{text[:2000]}")
             else:
-                text = str(chunk)
-            results.append(f"--- Chunk {i+1} ---\n{text[:2000]}") # Cap each chunk
+                # Fallback for old format
+                if isinstance(chunk, dict):
+                    text = chunk.get("document", chunk.get("content", str(chunk)))
+                else:
+                    text = str(chunk)
+                results.append(f"--- Chunk {i+1} ---\n{text[:2000]}") # Cap each chunk
             
         if not results:
             return json.dumps({
@@ -436,10 +471,14 @@ def search_web(query: str) -> str:
 
 
 @mcp.tool()
-def fetch_url(url: str) -> str:
+def fetch_url(url: str, skip_indexing: bool = False) -> str:
     """Fetch the text content of a URL (web page or PDF).
     If the document is too large (over 8,000 tokens), it will automatically index the document
     and return a collection_name or file_id which you can pass to `semantic_search`.
+    
+    WARNING: Semantic search on raw JSON payloads performs extremely poorly. 
+    If you are fetching a large JSON payload (e.g. GitHub API), set `skip_indexing=True`
+    to return raw truncated JSON instead of indexing it.
     """
     if not url:
         raise Exception("url is required")
@@ -462,7 +501,7 @@ def fetch_url(url: str) -> str:
             except ImportError:
                 token_count = len(text) // 4
                 
-            if token_count > 8000:
+            if token_count > 8000 and not skip_indexing:
                 try:
                     index_resp = client.post(
                         "/api/v1/retrieval/process/url",
@@ -501,7 +540,7 @@ def fetch_url(url: str) -> str:
     except Exception as e:
         error_msg = str(e)
         if "404" in error_msg:
-            hint = "The URL does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL."
+            hint = "The URL does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL, or try fetching the parent directory."
         elif "401" in error_msg or "403" in error_msg or "503" in error_msg:
             hint = "The website is aggressively blocking standard HTTP bots (like Cloudflare). Please use `search_web` instead to read alternative sources."
         else:
@@ -551,7 +590,7 @@ def fetch_url(url: str) -> str:
         except ImportError:
             token_count = char_count // 4
 
-        if token_count > 8000:
+        if token_count > 8000 and not skip_indexing:
             try:
                 metadata = {"process": True, "source": "openwebui-mcp", "source_url": url}
                 with open(tmp_path, "rb") as fh:
