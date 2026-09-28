@@ -509,17 +509,6 @@ def fetch_url(url: str) -> str:
         if owui_resp.get("type") in ("web", "youtube") and owui_resp.get("content"):
             text = owui_resp.get("content")
             
-            # Detect JSON and format it
-            if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
-                try:
-                    data = json.loads(text)
-                    text = format_json_for_rag(data)
-                    # If it's huge, force fallback to local file upload so we can upload the markdown
-                    if len(text) // 4 > 8000:
-                        raise Exception("JSON detected and formatted. Falling back to local upload.")
-                except Exception as e:
-                    if "JSON detected" in str(e): raise e
-            
             try:
                 import tiktoken
                 encoding = tiktoken.get_encoding("cl100k_base")
@@ -528,6 +517,13 @@ def fetch_url(url: str) -> str:
                 token_count = len(text) // 4
                 
             if token_count > 8000:
+                # Detect JSON and force fallback so it can be formatted as Markdown
+                if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
+                    try:
+                        json.loads(text) # Just to verify it's valid
+                        raise Exception("JSON detected. Falling back to local upload to flatten it.")
+                    except Exception as e:
+                        if "JSON detected" in str(e): raise e
                 try:
                     index_resp = client.post(
                         "/api/v1/retrieval/process/url",
@@ -605,21 +601,34 @@ def fetch_url(url: str) -> str:
             try:
                 with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read()
-                    
-                if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
-                    try:
-                        data = json.loads(text)
-                        text = format_json_for_rag(data)
-                        # Overwrite tmp_path with markdown so it gets indexed cleanly
-                        with open(tmp_path, "w", encoding="utf-8") as f:
-                            f.write(text)
-                        if not filename.endswith(".md"):
-                            filename = filename + ".md"
-                        mime = "text/markdown"
-                    except Exception:
-                        pass
             except Exception:
                 text = ""
+
+        char_count = len(text)
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            token_count = len(encoding.encode(text, disallowed_special=()))
+        except ImportError:
+            token_count = char_count // 4
+
+        # If it's a large JSON, format it to Markdown and overwrite the file before indexing
+        if token_count > 8000 and (text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]"))):
+            try:
+                data = json.loads(text)
+                text = format_json_for_rag(data)
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                if not filename.endswith(".md"):
+                    filename = filename + ".md"
+                mime = "text/markdown"
+                # Recalculate token count for the new formatted text
+                try:
+                    token_count = len(encoding.encode(text, disallowed_special=()))
+                except:
+                    token_count = len(text) // 4
+            except Exception:
+                pass
 
         char_count = len(text)
         try:
