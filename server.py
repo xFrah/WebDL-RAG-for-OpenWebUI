@@ -645,6 +645,89 @@ def fetch_url(url: str) -> str:
             pass
 
 
+@mcp.tool()
+def grep_file(file_id: str, query: str, is_regex: bool = False, ignore_case: bool = True, context_lines: int = 2) -> str:
+    """Exact-text search (grep) on a file stored in Open WebUI.
+    
+    This works by downloading the extracted text from Open WebUI and searching it.
+    Use this for precise exact-match searches (e.g. searching for a specific code identifier) 
+    that semantic search struggles with.
+    
+    Args:
+        file_id: The ID of the file in Open WebUI (e.g., from download_file or search).
+        query: The string or regex to search for.
+        is_regex: If True, treats query as a regular expression.
+        ignore_case: If True, makes the search case-insensitive.
+        context_lines: Number of lines to show before and after each match.
+    """
+    if not file_id or not query:
+        return json.dumps({"ok": False, "error": "file_id and query are required"})
+        
+    try:
+        # Fetch the extracted text content from Open WebUI
+        # This endpoint returns the raw string content of the file
+        content = client.get(f"/api/v1/files/{file_id}/content")
+        
+        if not content:
+            return json.dumps({"ok": False, "error": f"File {file_id} not found or has no extracted text content."})
+            
+        if isinstance(content, dict) and "content" in content:
+            text = content["content"]
+        elif isinstance(content, dict) and "data" in content and isinstance(content["data"], dict):
+            text = content["data"].get("content", "")
+        else:
+            text = str(content)
+            
+        lines = text.split("\n")
+        flags = re.IGNORECASE if ignore_case else 0
+        
+        if not is_regex:
+            query = re.escape(query)
+            
+        pattern = re.compile(query, flags)
+        
+        results = []
+        matches_count = 0
+        
+        # Simple sliding window for context
+        for i, line in enumerate(lines):
+            if pattern.search(line):
+                matches_count += 1
+                start = max(0, i - context_lines)
+                end = min(len(lines), i + context_lines + 1)
+                
+                match_block = []
+                for j in range(start, end):
+                    prefix = "> " if j == i else "  "
+                    match_block.append(f"{j+1:04d} {prefix} {lines[j]}")
+                    
+                results.append("\n".join(match_block))
+                
+        if not results:
+            return json.dumps({
+                "ok": True,
+                "matches": 0,
+                "results": f"No matches found for '{query}' in file {file_id}."
+            })
+            
+        # Limit to first 20 matches to avoid blowing up context window
+        cap_msg = ""
+        if len(results) > 20:
+            cap_msg = f"\n...and {len(results) - 20} more matches omitted."
+            results = results[:20]
+            
+        output = f"Found {matches_count} matches in file {file_id}:\n\n" + "\n---\n".join(results) + cap_msg
+        
+        return json.dumps({
+            "ok": True,
+            "matches": matches_count,
+            "results": output
+        })
+        
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Failed to grep file: {e}"})
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint — stdio (default) or streamable-http (Open WebUI native MCP)
 # ---------------------------------------------------------------------------
