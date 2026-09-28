@@ -308,14 +308,14 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
 
     payload = {
         "query": query,
-        "collection_names": collection_names,
-        "file_ids": file_ids
+        "collection_names": collection_names + file_ids,
     }
     
     try:
-        # Open WebUI retrieval endpoint
-        resp = client.post("/api/v1/retrieval/query", json=payload, timeout=60.0)
+        # Open WebUI's actual retrieval endpoint for querying collections
+        resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
         chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+
         
         # Format chunks safely to prevent token explosion
         results = []
