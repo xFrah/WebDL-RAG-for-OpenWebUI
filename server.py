@@ -396,42 +396,27 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
 
 
 @mcp.tool()
-def search_web(query: str, max_results: int = 5) -> str:
-    """Search the web for information using DuckDuckGo.
-    Returns a list of search results with titles, snippets, and URLs.
+def search_web(query: str) -> str:
+    """Search the web for information using Open WebUI's configured search engines.
+    Returns a list of search results or a collection name.
     """
     if not query:
         raise Exception("query is required")
         
     try:
-        from duckduckgo_search import DDGS
-    except ImportError:
-        return json.dumps({"ok": False, "error": "duckduckgo-search is not installed. Run `pip install duckduckgo-search`."})
+        resp = client.post("/api/v1/retrieval/process/web/search", json={"queries": [query]}, timeout=120.0)
         
-    try:
-        results = []
-        with DDGS() as ddgs:
-            # max_results controls how many results we pull back
-            for r in ddgs.text(query, max_results=max_results, region="us-en"):
-                results.append({
-                    "title": r.get("title"),
-                    "link": r.get("href"),
-                    "snippet": r.get("body")
-                })
-                
-        if not results:
-            return json.dumps({
-                "ok": False,
-                "error": "DuckDuckGo returned 0 results. Please try a different query."
-            }, ensure_ascii=False)
+        if resp is None:
+            return json.dumps({"ok": False, "error": "Open WebUI returned None. Web search may be disabled or failed."}, ensure_ascii=False)
             
         return json.dumps({
             "ok": True,
             "query": query,
-            "results": results
+            "results": resp
         }, ensure_ascii=False)
+        
     except Exception as e:
-        return json.dumps({"ok": False, "error": f"Failed to search DuckDuckGo: {e}"}, ensure_ascii=False)
+        return json.dumps({"ok": False, "error": f"Failed to reach Open WebUI web search: {e}"}, ensure_ascii=False)
 
 def format_json_for_rag(data):
     """Flattens JSON into a Markdown-friendly format for better semantic chunking."""

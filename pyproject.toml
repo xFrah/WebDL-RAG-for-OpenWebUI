@@ -10,7 +10,6 @@ dependencies = [
     "pypdf",
     "beautifulsoup4",
     "tiktoken",
-    "duckduckgo-search",
 ]
 
 [project.scripts]
