@@ -352,11 +352,12 @@ def query_documents(question: str, file_ids: list[str] = [], collection_names: l
 
 @mcp.tool()
 def estimate_url_size(url: str) -> str:
-    """Download a URL and estimate its size in characters and tokens.
-
-    Use this when you want to decide if a document is small enough to be
-    read directly (e.g. if you have a separate web reading tool) or if
-    it's too large and should be processed by Open WebUI via download_file.
+    """CRITICAL RULE: You MUST call this tool FIRST before calling `fetch_url` or reading any webpage/document directly!
+    
+    This tool downloads a URL and estimates its size in characters and tokens.
+    Use this to decide if a document is small enough to be read directly using 
+    your standard `fetch_url` tool (under ~8,000 tokens), or if it's too large 
+    and MUST be processed by Open WebUI via `download_file` or `process_web_url`.
     """
     if not url:
         raise Exception("url is required")
