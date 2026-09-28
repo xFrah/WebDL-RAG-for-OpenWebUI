@@ -306,26 +306,30 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
     if not file_ids and not collection_names:
         raise Exception("You must provide at least one file_id or collection_name.")
 
-    payload = {
-        "query": query,
-        "collection_names": collection_names + file_ids,
-    }
+    all_chunks = []
     
     try:
-        # Open WebUI's actual retrieval endpoint for querying collections
-        resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
-        chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
-        
-        # ChromaDB returns batched results (a list of lists): [["text1", "text2"]]
-        if chunks and isinstance(chunks[0], list):
-            chunks = chunks[0]
+        # Search individual files
+        for file_id in file_ids:
+            payload = {"query": query, "collection_name": file_id}
+            resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
+            chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+            if chunks and isinstance(chunks[0], list):
+                chunks = chunks[0]
+            all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
             
-        # Filter out completely empty chunks if any
-        chunks = [c for c in chunks if c and str(c).strip() != "[]"]
-        
+        # Search collections
+        if collection_names:
+            payload = {"query": query, "collection_names": collection_names}
+            resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
+            chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+            if chunks and isinstance(chunks[0], list):
+                chunks = chunks[0]
+            all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
+            
         # Format chunks safely to prevent token explosion
         results = []
-        for i, chunk in enumerate(chunks[:10]):  # Limit to top 10 chunks
+        for i, chunk in enumerate(all_chunks[:10]):  # Limit to top 10 chunks
             if isinstance(chunk, dict):
                 text = chunk.get("document", chunk.get("content", str(chunk)))
             else:
@@ -336,7 +340,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             return json.dumps({
                 "ok": True, 
                 "answer": "No relevant text chunks found in the database.",
-                "debug_raw_response": resp
+                "debug_raw_response": resp if (file_ids or collection_names) else "No files/collections queried"
             }, ensure_ascii=False)
             
         return json.dumps({
