@@ -325,7 +325,7 @@ def download_and_index(url: str, knowledge_id: Optional[str] = None,
             payload = client.post(
                 "/api/v1/files/",
                 files={"file": (filename, fh, mime), "metadata": (None, json.dumps(metadata), "application/json")},
-                params={"process": "true", "process_in_background": "true"},
+                params={"process": "true", "process_in_background": "false"},
                 timeout=600.0,
             )
         file_id = payload.get("id")
