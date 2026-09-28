@@ -14,9 +14,14 @@ def main():
         "uv", "run", "server.py"
     ]
     
+    # Ensure server.py runs in stdio mode, overriding any shell exports
+    env = os.environ.copy()
+    env["MCP_TRANSPORT"] = "stdio"
+    env.pop("MCP_HTTP_PORT", None)
+    
     try:
         # Execute the command and stream output directly to the terminal
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=env)
     except KeyboardInterrupt:
         print("\nShutting down server...")
     except subprocess.CalledProcessError as e:
