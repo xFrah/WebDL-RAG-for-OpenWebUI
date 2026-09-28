@@ -472,14 +472,10 @@ def search_web(query: str) -> str:
 
 
 @mcp.tool()
-def fetch_url(url: str, skip_indexing: bool = False) -> str:
+def fetch_url(url: str) -> str:
     """Fetch the text content of a URL (web page or PDF).
     If the document is too large (over 8,000 tokens), it will automatically index the document
     and return a collection_name or file_id which you can pass to `semantic_search`.
-    
-    WARNING: Semantic search on raw JSON payloads performs extremely poorly. 
-    If you are fetching a large JSON payload (e.g. GitHub API), set `skip_indexing=True`
-    to return raw truncated JSON instead of indexing it.
     """
     if not url:
         raise Exception("url is required")
@@ -502,7 +498,7 @@ def fetch_url(url: str, skip_indexing: bool = False) -> str:
             except ImportError:
                 token_count = len(text) // 4
                 
-            if token_count > 8000 and not skip_indexing:
+            if token_count > 8000:
                 try:
                     index_resp = client.post(
                         "/api/v1/retrieval/process/url",
@@ -591,7 +587,7 @@ def fetch_url(url: str, skip_indexing: bool = False) -> str:
         except ImportError:
             token_count = char_count // 4
 
-        if token_count > 8000 and not skip_indexing:
+        if token_count > 8000:
             try:
                 metadata = {"process": True, "source": "openwebui-mcp", "source_url": url}
                 with open(tmp_path, "rb") as fh:
