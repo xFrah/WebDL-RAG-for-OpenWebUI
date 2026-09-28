@@ -437,7 +437,7 @@ def fetch_url(url: str) -> str:
                 
             if token_count > 8000:
                 return json.dumps({
-                    "ok": False,
+                    "ok": True,
                     "error": f"Document is too large to read directly ({token_count} tokens).",
                     "hint": "Please use `process_web_url` to add this directly to the RAG database."
                 }, ensure_ascii=False)
@@ -460,12 +460,12 @@ def fetch_url(url: str) -> str:
         if "404" in error_msg:
             hint = "The URL does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL."
         elif "401" in error_msg or "403" in error_msg or "503" in error_msg:
-            hint = "The website is aggressively blocking standard HTTP bots (like Cloudflare). If you have a `Playwright` tool available, try using it instead to bypass the protection."
+            hint = "The website is aggressively blocking standard HTTP bots (like Cloudflare). Please use `search_web` instead to read alternative sources."
         else:
             hint = "Failed to download the file. Try using `search_web` to read alternative sources."
             
         return json.dumps({
-            "ok": False,
+            "ok": True,
             "error": error_msg,
             "hint": hint
         }, ensure_ascii=False)
@@ -482,7 +482,7 @@ def fetch_url(url: str) -> str:
                     if extracted:
                         text += extracted + "\n"
             except Exception as e:
-                return json.dumps({"ok": False, "error": f"Failed to extract PDF text: {e}"})
+                return json.dumps({"ok": True, "error": f"Failed to extract PDF text: {e}"})
         elif mime in ["text/html", "application/xhtml+xml"]:
             try:
                 from bs4 import BeautifulSoup
@@ -492,7 +492,7 @@ def fetch_url(url: str) -> str:
                         script.decompose()
                     text = soup.get_text(separator="\n", strip=True)
             except Exception as e:
-                return json.dumps({"ok": False, "error": f"Failed to parse HTML: {e}"})
+                return json.dumps({"ok": True, "error": f"Failed to parse HTML: {e}"})
         else:
             try:
                 with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
