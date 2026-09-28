@@ -369,7 +369,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
                 if loc: source += f" ({loc})"
                 dist = chunk.get("dist", "N/A")
                 if isinstance(dist, float): dist = round(dist, 4)
-                results.append(f"--- Chunk {i+1} (Source: {source} | Distance: {dist}) ---\n{text[:2000]}")
+                results.append(f"--- Chunk {i+1} (Source: {source} | Score: {dist}) ---\n{text[:2000]}")
             else:
                 # Fallback for old format
                 if isinstance(chunk, dict):
