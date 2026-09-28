@@ -396,76 +396,42 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
 
 
 @mcp.tool()
-def search_web(query: str) -> str:
-    """Search the web for information using the configured SearxNG engine.
+def search_web(query: str, max_results: int = 5) -> str:
+    """Search the web for information using DuckDuckGo.
     Returns a list of search results with titles, snippets, and URLs.
     """
     if not query:
         raise Exception("query is required")
         
-    # 1. Fetch config from Open WebUI to get SearxNG URL
-    config = client.get("/api/v1/retrieval/config")
-    web_config = config.get("web", {})
-    engine = web_config.get("WEB_SEARCH_ENGINE")
-    
-    if engine != "searxng":
-        return json.dumps({"ok": False, "error": f"Open WebUI is configured to use '{engine}', but this tool currently only supports searxng."})
-        
-    searxng_url = web_config.get("SEARXNG_QUERY_URL")
-    if not searxng_url:
-        return json.dumps({"ok": False, "error": "SEARXNG_QUERY_URL is not configured in Open WebUI."})
-        
-    # Translate Docker-internal hostname and port to the host's exposed port
-    searxng_url = searxng_url.replace("http://searxng:8080", "http://127.0.0.1:8888")
-        
-    # 2. Query SearxNG
-    headers = {
-        'User-Agent': 'Open WebUI (https://github.com/open-webui/open-webui) RAG Bot',
-        'Accept': 'text/html',
-        'Accept-Encoding': 'gzip, deflate',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-    }
-    
-    params = {
-        'q': query,
-        'format': 'json',
-        'pageno': 1,
-        'safesearch': '1',
-        'language': 'all',
-        'theme': 'simple',
-        'image_proxy': 0,
-    }
-    
     try:
-        with httpx.Client(timeout=30.0, follow_redirects=True) as http:
-            resp = http.get(searxng_url, headers=headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as e:
-        return json.dumps({"ok": False, "error": f"Failed to reach SearxNG at {searxng_url}: {e}"})
+        from duckduckgo_search import DDGS
+    except ImportError:
+        return json.dumps({"ok": False, "error": "duckduckgo-search is not installed. Run `pip install duckduckgo-search`."})
         
-    results = data.get("results", [])
-    if not results:
+    try:
+        results = []
+        with DDGS() as ddgs:
+            # max_results controls how many results we pull back
+            for r in ddgs.text(query, max_results=max_results):
+                results.append({
+                    "title": r.get("title"),
+                    "link": r.get("href"),
+                    "snippet": r.get("body")
+                })
+                
+        if not results:
+            return json.dumps({
+                "ok": False,
+                "error": "DuckDuckGo returned 0 results. Please try a different query."
+            }, ensure_ascii=False)
+            
         return json.dumps({
-            "ok": False,
-            "error": f"SearxNG returned 0 results. The engine may be down, rate-limited, or misconfigured. Raw response: {data}"
-        }, ensure_ascii=False)
-    
-    return json.dumps(
-        {
             "ok": True,
             "query": query,
-            "results": [
-                {
-                    "title": item.get("title"),
-                    "link": item.get("url"),
-                    "snippet": item.get("content")
-                } for item in results[:5]
-            ]
-        },
-        ensure_ascii=False,
-    )
+            "results": results
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Failed to search DuckDuckGo: {e}"}, ensure_ascii=False)
 
 def format_json_for_rag(data):
     """Flattens JSON into a Markdown-friendly format for better semantic chunking."""
