@@ -314,7 +314,11 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
     try:
         # Search individual files
         for file_id in file_ids:
-            payload = {"query": query, "collection_name": file_id, "k": 10, "r": -1.0}
+            if not file_id.startswith("file-") and not file_id.startswith("web-search-"):
+                collection_name = f"file-{file_id}"
+            else:
+                collection_name = file_id
+            payload = {"query": query, "collection_name": collection_name, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
             if resp is None:
                 continue
