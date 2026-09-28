@@ -9,7 +9,7 @@ def main():
     # Run the mcpo proxy, pointing it to start our local server.py
     cmd = [
         "uv", "run", "mcpo",
-        "--port", "8766",
+        "--port", "8767",
         "--",
         "uv", "run", "server.py"
     ]
