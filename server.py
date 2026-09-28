@@ -436,11 +436,27 @@ def fetch_url(url: str) -> str:
                 token_count = len(text) // 4
                 
             if token_count > 8000:
-                return json.dumps({
-                    "ok": True,
-                    "error": f"Document is too large to read directly ({token_count} tokens).",
-                    "hint": "Please use `process_web_url` to add this directly to the RAG database."
-                }, ensure_ascii=False)
+                try:
+                    index_resp = client.post(
+                        "/api/v1/retrieval/process/url",
+                        params={"process": "true"},
+                        json={"url": url},
+                        timeout=120.0
+                    )
+                    collection_name = index_resp.get("collection_name")
+                    return json.dumps({
+                        "ok": True,
+                        "url": url,
+                        "token_count": token_count,
+                        "indexed": True,
+                        "collection_name": collection_name,
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `query_documents` with collection_names=[\"{collection_name}\"] to search it."
+                    }, ensure_ascii=False)
+                except Exception as index_e:
+                    return json.dumps({
+                        "ok": True,
+                        "error": f"Document is too large to read directly ({token_count} tokens) and automatic indexing failed: {index_e}"
+                    }, ensure_ascii=False)
                 
             return json.dumps({
                 "ok": True,
@@ -509,14 +525,31 @@ def fetch_url(url: str) -> str:
             token_count = char_count // 4
 
         if token_count > 8000:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": f"Document is too large to read directly ({token_count} tokens).",
-                    "hint": "Please use `download_file` (for PDFs) or `process_web_url` (for HTML) instead to add this directly to the RAG database."
-                },
-                ensure_ascii=False,
-            )
+            try:
+                metadata = {"process": True, "source": "openwebui-mcp", "source_url": url}
+                with open(tmp_path, "rb") as fh:
+                    payload = client.post(
+                        "/api/v1/files/",
+                        files={"file": (filename, fh, mime), "metadata": (None, json.dumps(metadata), "application/json")},
+                        params={"process": "true", "process_in_background": "false"},
+                        timeout=600.0,
+                    )
+                file_id = payload.get("id")
+                if file_id:
+                    wait_for_file_processing(file_id)
+                    return json.dumps({
+                        "ok": True,
+                        "url": url,
+                        "token_count": token_count,
+                        "indexed": True,
+                        "file_id": file_id,
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `query_documents` with file_ids=[\"{file_id}\"] to search it."
+                    }, ensure_ascii=False)
+            except Exception as index_e:
+                return json.dumps({
+                    "ok": True,
+                    "error": f"Document is too large to read directly ({token_count} tokens) and automatic indexing failed: {index_e}"
+                }, ensure_ascii=False)
 
         return json.dumps(
             {
