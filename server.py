@@ -388,9 +388,10 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
                 "debug_raw_response": resp if (file_ids or collection_names) else "No files/collections queried"
             }, ensure_ascii=False)
             
+        answer_text = "\n\n".join(results)
         return json.dumps({
             "ok": True,
-            "answer": "\n\n".join(results)
+            "answer": answer_text
         }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"ok": False, "error": f"Semantic search failed: {str(e)}"})
