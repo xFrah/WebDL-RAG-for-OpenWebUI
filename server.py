@@ -228,14 +228,15 @@ def download_file(url: str, wait: bool = True) -> str:
         }
         mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         
-        # If filename lacks an extension but we know the mime type, append the extension.
-        # This is critical because Open WebUI's file loaders rely heavily on file extensions (e.g. .pdf)
-        if "." not in filename and mime:
+        # If filename lacks the correct extension for its mime type, append it.
+        # e.g., '1706.03762' has a dot, but '03762' is not '.pdf'.
+        if mime:
             ext = mimetypes.guess_extension(mime)
-            if ext:
+            if mime == "application/pdf":
+                ext = ".pdf"
+                
+            if ext and not filename.lower().endswith(ext.lower()):
                 filename += ext
-            elif mime == "application/pdf":
-                filename += ".pdf"
 
         with open(tmp_path, "rb") as fh:
             payload = client.post(
