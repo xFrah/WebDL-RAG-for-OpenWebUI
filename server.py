@@ -412,7 +412,7 @@ def search_web(query: str, max_results: int = 5) -> str:
         results = []
         with DDGS() as ddgs:
             # max_results controls how many results we pull back
-            for r in ddgs.text(query, max_results=max_results, region="us-en", backend="html"):
+            for r in ddgs.text(query, max_results=max_results, region="us-en"):
                 results.append({
                     "title": r.get("title"),
                     "link": r.get("href"),
