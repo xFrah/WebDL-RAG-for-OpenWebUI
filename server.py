@@ -269,13 +269,15 @@ def process_web_url(url: str) -> str:
     if not url:
         raise Exception("url is required")
 
-    collection_name = f"web:{uuid.uuid4().hex[:8]}"
     result = client.post(
         "/api/v1/retrieval/process/web",
         params={"process": "true", "overwrite": "true"},
-        json={"url": url, "collection_name": collection_name},
+        json={"url": url},
         timeout=300.0,
     )
+    
+    collection_name = result.get("collection_name")
+    
     return json.dumps(
         {
             "ok": True,
