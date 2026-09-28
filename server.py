@@ -350,6 +350,75 @@ def query_documents(question: str, file_ids: list[str] = [], collection_names: l
     )
 
 
+@mcp.tool()
+def estimate_url_size(url: str) -> str:
+    """Download a URL and estimate its size in characters and tokens.
+
+    Use this when you want to decide if a document is small enough to be
+    read directly (e.g. if you have a separate web reading tool) or if
+    it's too large and should be processed by Open WebUI via download_file.
+    """
+    if not url:
+        raise Exception("url is required")
+
+    tmp_path, filename, size = download_to_disk(url)
+    try:
+        mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        text = ""
+
+        if mime == "application/pdf":
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(tmp_path)
+                for page in reader.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text += extracted + "\n"
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Failed to extract PDF text: {e}"})
+        elif mime in ["text/html", "application/xhtml+xml"]:
+            try:
+                from bs4 import BeautifulSoup
+                with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
+                    soup = BeautifulSoup(f.read(), "html.parser")
+                    text = soup.get_text(separator="\n", strip=True)
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Failed to parse HTML: {e}"})
+        else:
+            try:
+                with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except Exception:
+                text = ""
+
+        char_count = len(text)
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            token_count = len(encoding.encode(text, disallowed_special=()))
+        except ImportError:
+            token_count = char_count // 4
+
+        return json.dumps(
+            {
+                "ok": True,
+                "url": url,
+                "filename": filename,
+                "file_size_bytes": size,
+                "character_count": char_count,
+                "estimated_tokens": token_count,
+                "hint": "If estimated_tokens is under ~8,000, you can safely read it directly. If it is very large, use download_file to add it to RAG instead.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint — stdio (default) or streamable-http (Open WebUI native MCP)
 # ---------------------------------------------------------------------------

@@ -7,6 +7,9 @@ dependencies = [
     "mcp[cli]>=1.2.0,<2",
     "httpx>=0.27",
     "mcpo>=0.0.20",
+    "pypdf",
+    "beautifulsoup4",
+    "tiktoken",
 ]
 
 [project.scripts]
