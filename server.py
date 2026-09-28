@@ -372,6 +372,9 @@ def search_web(query: str) -> str:
     if not searxng_url:
         return json.dumps({"ok": False, "error": "SEARXNG_QUERY_URL is not configured in Open WebUI."})
         
+    # Translate Docker-internal hostname to localhost since MCP runs on the host OS
+    searxng_url = searxng_url.replace("http://searxng:", "http://127.0.0.1:")
+        
     # 2. Query SearxNG
     params = {
         "q": query,
