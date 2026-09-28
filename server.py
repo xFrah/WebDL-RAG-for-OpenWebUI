@@ -456,10 +456,18 @@ def fetch_url(url: str) -> str:
     try:
         tmp_path, filename, size, ctype = download_to_disk(url)
     except Exception as e:
+        error_msg = str(e)
+        if "404" in error_msg:
+            hint = "The URL does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL."
+        elif "401" in error_msg or "403" in error_msg or "503" in error_msg:
+            hint = "The website is aggressively blocking standard HTTP bots (like Cloudflare). If you have a `Playwright` tool available, try using it instead to bypass the protection."
+        else:
+            hint = "Failed to download the file. Try using `search_web` to read alternative sources."
+            
         return json.dumps({
             "ok": False,
-            "error": str(e),
-            "hint": "The website is aggressively blocking standard HTTP bots (like Cloudflare). If you have a `Playwright` tool available, try using it instead to bypass the protection. Otherwise, use `search_web` to read alternative sources."
+            "error": error_msg,
+            "hint": hint
         }, ensure_ascii=False)
     try:
         mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
