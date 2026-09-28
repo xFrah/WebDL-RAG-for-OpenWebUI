@@ -214,7 +214,7 @@ def download_file(url: str, wait: bool = True) -> str:
 
     Use this instead of fetching big documents into the context window.
     The file is processed and you will receive a file_id, which you can
-    pass directly to query_documents.
+    pass directly to semantic_search.
     """
     if not url:
         raise Exception("url is required")
@@ -249,7 +249,7 @@ def download_file(url: str, wait: bool = True) -> str:
                 "size_bytes": size,
                 "file_id": file_id,
                 "processing": processing,
-                "hint": "Ready: call query_documents with file_ids=[\"" + file_id + "\"] to ask questions.",
+                "hint": "Ready: call semantic_search with file_ids=[\"" + file_id + "\"] to search it.",
             },
             ensure_ascii=False,
             default=str,
@@ -266,7 +266,7 @@ def process_web_url(url: str) -> str:
     """Ingest a web page directly into Open WebUI.
 
     Best for HTML documentation. Returns a collection_name which you
-    can pass to query_documents.
+    can pass to semantic_search.
     """
     if not url:
         raise Exception("url is required")
@@ -286,7 +286,7 @@ def process_web_url(url: str) -> str:
             "url": url,
             "collection_name": collection_name,
             "upstream_result": {k: v for k, v in (result or {}).items() if k in ("count", "documents", "success", "error")},
-            "hint": "Ready: call query_documents with collection_names=[\"" + collection_name + "\"] to ask questions.",
+            "hint": "Ready: call semantic_search with collection_names=[\"" + collection_name + "\"] to search it.",
         },
         ensure_ascii=False,
         default=str,
@@ -294,64 +294,48 @@ def process_web_url(url: str) -> str:
 
 
 @mcp.tool()
-def query_documents(question: str, file_ids: list[str] = [], collection_names: list[str] = [], model: Optional[str] = None) -> str:
-    """Ask a question, answered by RAG over the provided files or web collections.
-
-    Runs POST /api/chat/completions so the model grounds its answer in
-    the provided files. You must provide at least one file_id or collection_name.
+def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = []) -> str:
+    """Perform a pure semantic search on the Open WebUI vector database.
+    
+    Returns the raw text chunks matching the query. Bypasses the internal LLM completely,
+    saving tokens and time. Use this when you want to read the raw context yourself instead
+    of having it summarized.
     """
-    if not question:
-        raise Exception("question is required")
+    if not query:
+        raise Exception("query is required")
     if not file_ids and not collection_names:
         raise Exception("You must provide at least one file_id or collection_name.")
-        
-    model = model or DEFAULT_MODEL
-    if not model:
-        raise Exception("No model specified and OPENWEBUI_DEFAULT_MODEL is not set. Pass model=... or set the env var.")
-        
-    files = []
-    for fid in file_ids:
-        files.append({"type": "file", "id": fid})
-    for cid in collection_names:
-        files.append({"type": "collection", "id": cid})
 
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": "user", "content": question}],
-        "files": files,
-        "stream": True,
-        "stream_options": {"include_usage": True},
+    payload = {
+        "query": query,
+        "collection_names": collection_names,
+        "file_ids": file_ids
     }
-    chunks: list[str] = []
-    usage: Optional[dict[str, Any]] = None
-    with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(30.0, read=1200.0)) as http:
-        with http.stream("POST", f"{OPENWEBUI_URL}/api/chat/completions", headers=base_headers(), json=payload) as resp:
-            if resp.status_code >= 400:
-                raise _api_error(resp)
-            for line in resp.iter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    evt = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                if "usage" in evt and evt["usage"]:
-                    usage = evt["usage"]
-                choices = evt.get("choices") or []
-                if choices:
-                    delta = choices[0].get("delta") or {}
-                    text = _content_to_text(delta.get("content"))
-                    if text:
-                        chunks.append(text)
-    answer = "".join(chunks).strip()
-    return json.dumps(
-        {"ok": bool(answer), "answer": answer, "usage": usage, "model": model},
-        ensure_ascii=False,
-        default=str,
-    )
+    
+    try:
+        # Open WebUI retrieval endpoint
+        resp = client.post("/api/v1/retrieval/query", json=payload, timeout=60.0)
+        chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+        
+        # Format chunks safely to prevent token explosion
+        results = []
+        for i, chunk in enumerate(chunks[:10]):  # Limit to top 10 chunks
+            if isinstance(chunk, dict):
+                text = chunk.get("document", chunk.get("content", str(chunk)))
+            else:
+                text = str(chunk)
+            results.append(f"--- Chunk {i+1} ---\n{text[:2000]}") # Cap each chunk
+            
+        if not results:
+            return json.dumps({"ok": True, "answer": "No relevant text chunks found in the database."})
+            
+        return json.dumps({
+            "ok": True,
+            "answer": "\n\n".join(results)
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Semantic search failed: {str(e)}"})
+
 
 
 @mcp.tool()
@@ -450,7 +434,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "collection_name": collection_name,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `query_documents` with collection_names=[\"{collection_name}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `semantic_search` with collection_names=[\"{collection_name}\"] to search it."
                     }, ensure_ascii=False)
                 except Exception as index_e:
                     return json.dumps({
@@ -543,7 +527,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "file_id": file_id,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `query_documents` with file_ids=[\"{file_id}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `semantic_search` with file_ids=[\"{file_id}\"] to search it."
                     }, ensure_ascii=False)
             except Exception as index_e:
                 return json.dumps({
