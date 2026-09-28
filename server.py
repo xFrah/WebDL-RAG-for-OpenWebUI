@@ -416,7 +416,10 @@ def search_web(query: str) -> str:
         }, ensure_ascii=False)
         
     except Exception as e:
-        return json.dumps({"ok": False, "error": f"Failed to reach Open WebUI web search: {e}"}, ensure_ascii=False)
+        error_msg = str(e)
+        if "404" in error_msg and "No results found" in error_msg:
+            return json.dumps({"ok": False, "error": "Search engine returned 0 results. Please try a different query."}, ensure_ascii=False)
+        return json.dumps({"ok": False, "error": f"Web search failed: {e}"}, ensure_ascii=False)
 
 def format_json_for_rag(data):
     """Flattens JSON into a Markdown-friendly format for better semantic chunking."""
