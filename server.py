@@ -40,7 +40,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # ---------------------------------------------------------------------------
 # Config
@@ -221,7 +221,7 @@ def _content_to_text(content: Any) -> str:
 # FastMCP server + tools
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("openwebui-kb")
+mcp = MCPServer("openwebui-kb")
 
 
 @mcp.tool()
