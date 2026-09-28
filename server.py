@@ -40,7 +40,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import httpx
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
 # Config
@@ -221,7 +221,7 @@ def _content_to_text(content: Any) -> str:
 # FastMCP server + tools
 # ---------------------------------------------------------------------------
 
-mcp = MCPServer("openwebui-kb")
+mcp = FastMCP("openwebui-kb")
 
 
 @mcp.tool()
@@ -520,15 +520,16 @@ def delete_knowledge_base(knowledge_id: str) -> str:
 
 def main() -> None:
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    if transport in ("streamable-http", "http", "streamable_http", "sse"):
+    if transport in ("streamable-http", "http", "streamable_http"):
         host = os.environ.get("MCP_HTTP_HOST", "0.0.0.0")
         port = int(os.environ.get("MCP_HTTP_PORT", "8766"))
+        mcp.settings.host = host
+        mcp.settings.port = port
         try:
-            # In MCP SDK 2.x, host and port are passed to run() instead of mcp.settings
-            mcp.run(transport="sse", host=host, port=port)
+            mcp.run(transport="streamable-http")
         except (ImportError, ValueError, TypeError) as exc:
             raise SystemExit(
-                f"HTTP/SSE transport unavailable ({exc}). Install the latest "
+                f"streamable-http transport unavailable ({exc}). Install the latest "
                 f"mcp package, or run with MCP_TRANSPORT=stdio and front the server "
                 f"with the mcpo proxy for Open WebUI."
             )
