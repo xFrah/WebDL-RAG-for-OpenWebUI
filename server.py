@@ -316,6 +316,8 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
         for file_id in file_ids:
             payload = {"query": query, "collection_name": file_id, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
+            if resp is None:
+                continue
             chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
             if chunks and isinstance(chunks[0], list):
                 chunks = chunks[0]
@@ -325,10 +327,11 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
         if collection_names:
             payload = {"query": query, "collection_names": collection_names, "k": 10, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
-            chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
-            if chunks and isinstance(chunks[0], list):
-                chunks = chunks[0]
-            all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
+            if resp is not None:
+                chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
+                if chunks and isinstance(chunks[0], list):
+                    chunks = chunks[0]
+                all_chunks.extend([c for c in chunks if c and str(c).strip() != "[]"])
             
         # Format chunks safely to prevent token explosion
         results = []
