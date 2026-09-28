@@ -294,15 +294,11 @@ def process_web_url(url: str) -> str:
 
 
 @mcp.tool()
-def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = []) -> str:
+def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
     """Perform a pure semantic search on the Open WebUI vector database.
     
     Returns the raw text chunks matching the query. Bypasses the internal LLM completely.
-    
-    CRITICAL: Open WebUI uses strict semantic distance thresholds. 
-    DO NOT use keyword dumps (e.g. "embedding.py retrieval.py backend").
-    YOU MUST write full, descriptive, natural language sentences (e.g. "What files handle the retrieval backend and embeddings?").
-    If you use keywords, it will return 0 chunks.
+    Since Hybrid Search (BM25 + Vector) is enabled, you can use natural language OR keyword-based searches!
     """
     if not query:
         raise Exception("query is required")
@@ -318,7 +314,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
                 collection_name = f"file-{file_id}"
             else:
                 collection_name = file_id
-            payload = {"query": query, "collection_name": collection_name, "k": 10, "r": -1.0}
+            payload = {"query": query, "collection_name": collection_name, "k": top_k, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/doc", json=payload, timeout=60.0)
             if resp is None:
                 continue
@@ -339,7 +335,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             
         # Search collections
         if collection_names:
-            payload = {"query": query, "collection_names": collection_names, "k": 10, "r": -1.0}
+            payload = {"query": query, "collection_names": collection_names, "k": top_k, "r": -1.0}
             resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
             if resp is not None:
                 docs = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
@@ -358,7 +354,7 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             
         # Format chunks safely to prevent token explosion
         results = []
-        for i, chunk in enumerate(all_chunks[:10]):  # Limit to top 10 chunks
+        for i, chunk in enumerate(all_chunks[:top_k]):  # Limit to requested chunks
             if isinstance(chunk, dict) and "text" in chunk:
                 # New format with metadata
                 text = chunk["text"]
@@ -367,7 +363,8 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
                 else:
                     text = str(text)
                 meta = chunk["meta"]
-                source = meta.get("source", "Unknown")
+                # Prefer source_url/url for web fetches, fallback to file source
+                source = meta.get("source_url", meta.get("url", meta.get("source", "Unknown")))
                 loc = meta.get("loc", "")
                 if loc: source += f" ({loc})"
                 dist = chunk.get("dist", "N/A")
