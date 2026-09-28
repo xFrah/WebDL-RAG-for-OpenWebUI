@@ -333,7 +333,11 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
             results.append(f"--- Chunk {i+1} ---\n{text[:2000]}") # Cap each chunk
             
         if not results:
-            return json.dumps({"ok": True, "answer": "No relevant text chunks found in the database."})
+            return json.dumps({
+                "ok": True, 
+                "answer": "No relevant text chunks found in the database.",
+                "debug_raw_response": resp
+            }, ensure_ascii=False)
             
         return json.dumps({
             "ok": True,
