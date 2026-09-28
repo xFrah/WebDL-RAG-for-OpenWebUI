@@ -353,12 +353,61 @@ def query_documents(question: str, file_ids: list[str] = [], collection_names: l
 
 
 @mcp.tool()
-def estimate_url_size(url: str) -> str:
-    """Download a URL and estimate its size in characters and tokens.
+def search_web(query: str) -> str:
+    """Search the web for information using the configured SearxNG engine.
+    Returns a list of search results with titles, snippets, and URLs.
+    """
+    if not query:
+        raise Exception("query is required")
+        
+    # 1. Fetch config from Open WebUI to get SearxNG URL
+    config = client.get("/api/v1/retrieval/config")
+    web_config = config.get("web", {})
+    engine = web_config.get("WEB_SEARCH_ENGINE")
+    
+    if engine != "searxng":
+        return json.dumps({"ok": False, "error": f"Open WebUI is configured to use '{engine}', but this tool currently only supports searxng."})
+        
+    searxng_url = web_config.get("SEARXNG_QUERY_URL")
+    if not searxng_url:
+        return json.dumps({"ok": False, "error": "SEARXNG_QUERY_URL is not configured in Open WebUI."})
+        
+    # 2. Query SearxNG
+    params = {
+        "q": query,
+        "format": "json"
+    }
+    try:
+        with httpx.Client(timeout=30.0) as http:
+            resp = http.get(searxng_url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Failed to reach SearxNG at {searxng_url}: {e}"})
+        
+    results = data.get("results", [])
+    
+    return json.dumps(
+        {
+            "ok": True,
+            "query": query,
+            "results": [
+                {
+                    "title": item.get("title"),
+                    "link": item.get("url"),
+                    "snippet": item.get("content")
+                } for item in results[:5]
+            ]
+        },
+        ensure_ascii=False,
+    )
 
-    Use this when you want to decide if a document is small enough to be
-    read directly (e.g. if you have a separate web reading tool) or if
-    it's too large and should be processed by Open WebUI via download_file.
+
+@mcp.tool()
+def fetch_url(url: str) -> str:
+    """Fetch the text content of a URL (web page or PDF).
+    If the document is too large (over 8,000 tokens), it will reject the request 
+    and instruct you to use `download_file` or `process_web_url` instead.
     """
     if not url:
         raise Exception("url is required")
@@ -401,15 +450,23 @@ def estimate_url_size(url: str) -> str:
         except ImportError:
             token_count = char_count // 4
 
+        if token_count > 8000:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": f"Document is too large to read directly ({token_count} tokens).",
+                    "hint": "Please use `download_file` (for PDFs) or `process_web_url` (for HTML) instead to add this directly to the RAG database."
+                },
+                ensure_ascii=False,
+            )
+
         return json.dumps(
             {
                 "ok": True,
                 "url": url,
                 "filename": filename,
-                "file_size_bytes": size,
-                "character_count": char_count,
-                "estimated_tokens": token_count,
-                "hint": "If estimated_tokens is under ~8,000, you can safely read it directly. If it is very large, use download_file to add it to RAG instead.",
+                "token_count": token_count,
+                "content": text[:30000] # extra safety cap
             },
             ensure_ascii=False,
             default=str,
