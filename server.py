@@ -386,19 +386,38 @@ def search_web(query: str) -> str:
     searxng_url = searxng_url.replace("http://searxng:8080", "http://127.0.0.1:8888")
         
     # 2. Query SearxNG
-    params = {
-        "q": query,
-        "format": "json"
+    headers = {
+        'User-Agent': 'Open WebUI (https://github.com/open-webui/open-webui) RAG Bot',
+        'Accept': 'text/html',
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
     }
+    
+    params = {
+        'q': query,
+        'format': 'json',
+        'pageno': 1,
+        'safesearch': '1',
+        'language': 'all',
+        'theme': 'simple',
+        'image_proxy': 0,
+    }
+    
     try:
         with httpx.Client(timeout=30.0, follow_redirects=True) as http:
-            resp = http.get(searxng_url, params=params)
+            resp = http.get(searxng_url, headers=headers, params=params)
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
         return json.dumps({"ok": False, "error": f"Failed to reach SearxNG at {searxng_url}: {e}"})
         
     results = data.get("results", [])
+    if not results:
+        return json.dumps({
+            "ok": False,
+            "error": f"SearxNG returned 0 results. The engine may be down, rate-limited, or misconfigured. Raw response: {data}"
+        }, ensure_ascii=False)
     
     return json.dumps(
         {
@@ -419,8 +438,8 @@ def search_web(query: str) -> str:
 @mcp.tool()
 def fetch_url(url: str) -> str:
     """Fetch the text content of a URL (web page or PDF).
-    If the document is too large (over 8,000 tokens), it will reject the request 
-    and instruct you to use `download_file` or `process_web_url` instead.
+    If the document is too large (over 8,000 tokens), it will automatically index the document
+    and return a collection_name or file_id which you can pass to `semantic_search`.
     """
     if not url:
         raise Exception("url is required")
@@ -458,7 +477,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "collection_name": collection_name,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `semantic_search` with collection_names=[\"{collection_name}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed.\nSource URL: {url}\nCall `semantic_search` with collection_names=[\"{collection_name}\"] to search it."
                     }, ensure_ascii=False)
                 except Exception as index_e:
                     return json.dumps({
@@ -551,7 +570,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "file_id": file_id,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed. Call `semantic_search` with file_ids=[\"{file_id}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed.\nSource URL: {url}\nCall `semantic_search` with file_ids=[\"{file_id}\"] to search it."
                     }, ensure_ascii=False)
             except Exception as index_e:
                 return json.dumps({
