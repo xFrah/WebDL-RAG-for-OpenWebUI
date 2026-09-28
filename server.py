@@ -315,7 +315,13 @@ def semantic_search(query: str, file_ids: list[str] = [], collection_names: list
         # Open WebUI's actual retrieval endpoint for querying collections
         resp = client.post("/api/v1/retrieval/query/collection", json=payload, timeout=60.0)
         chunks = resp.get("documents", []) or resp.get("chunks", []) or resp.get("data", [])
-
+        
+        # ChromaDB returns batched results (a list of lists): [["text1", "text2"]]
+        if chunks and isinstance(chunks[0], list):
+            chunks = chunks[0]
+            
+        # Filter out completely empty chunks if any
+        chunks = [c for c in chunks if c and str(c).strip() != "[]"]
         
         # Format chunks safely to prevent token explosion
         results = []
