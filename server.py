@@ -602,6 +602,15 @@ def fetch_url(url: str) -> str:
 
         if token_count > 8000:
             try:
+                # If filename lacks the correct extension for its mime type, append it.
+                if mime:
+                    ext = mimetypes.guess_extension(mime)
+                    if mime == "application/pdf":
+                        ext = ".pdf"
+                        
+                    if ext and not filename.lower().endswith(ext.lower()):
+                        filename += ext
+                        
                 metadata = {"process": True, "source": "openwebui-mcp", "source_url": url}
                 with open(tmp_path, "rb") as fh:
                     payload = client.post(
