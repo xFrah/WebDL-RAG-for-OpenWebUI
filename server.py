@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
 """
 openwebui-kb-mcp — an MCP tool server that routes big-document work through
-Open WebUI's RAG pipeline instead of the LLM context window.
+Open WebUI's RAG pipeline without the overhead of Knowledge Bases.
 
 Workflow it gives the LLM:
-  1. create_knowledge_base   -> POST /api/v1/knowledge/create
-  2. download_and_index      -> download URL to disk (streamed, size-capped),
-                                POST /api/v1/files/  (process=true, metadata.knowledge_id)
-                                poll GET  /api/v1/files/{id}/process/status
-                                POST /api/v1/knowledge/{id}/file/add
-  3. process_web_url         -> POST /api/v1/retrieval/process/web  (no download)
-  4. query_knowledge_base    -> POST /api/chat/completions with
-                                files=[{type:"collection", id:<kb id>}]
+  1. download_file      -> download URL to disk (streamed, size-capped),
+                           POST /api/v1/files/ (process=true)
+                           poll GET /api/v1/files/{id}/process/status
+                           (Returns a file_id)
+  2. process_web_url    -> POST /api/v1/retrieval/process/web (no download)
+                           (Returns a collection_name)
+  3. query_documents    -> POST /api/chat/completions with
+                           files=[{type:"file", id:<file id>}, {type:"collection", id:<collection name>}]
 
 Config (environment variables, or .env file next to this script):
   OPENWEBUI_URL           base URL, e.g. http://localhost:3000
   OPENWEBUI_API_KEY       sk-... API key (Settings > Account)
-  OPENWEBUI_DEFAULT_MODEL model id used by query_knowledge_base (optional)
+  OPENWEBUI_DEFAULT_MODEL model id used by query_documents (optional)
   KB_PROCESS_TIMEOUT      seconds to wait for embedding (default 600)
   KB_MAX_FILE_BYTES       download size cap (default 2 GiB)
-
-Run (stdio — for MCP clients such as Claude Desktop, or Open WebUI's mcpo proxy):
-  uv run server.py
-
-Run (Streamable HTTP — the transport Open WebUI connects to natively, v0.6.31+):
-  MCP_TRANSPORT=streamable-http MCP_HTTP_PORT=8766 uv run server.py
 """
 
 from __future__ import annotations
@@ -183,21 +177,9 @@ def wait_for_file_processing(file_id: str, timeout: int | None = None) -> dict[s
                 raise Exception(f"RAG processing failed for file {file_id}: {data.get('error')}")
         if time.monotonic() >= deadline:
             raise Exception(
-                f"Timed out after {timeout}s waiting for file {file_id} to finish processing. "
-                f"You can check later with list_knowledge_files or the Open WebUI UI."
+                f"Timed out after {timeout}s waiting for file {file_id} to finish processing."
             )
         time.sleep(POLL_INTERVAL)
-
-
-def add_file_to_knowledge(knowledge_id: str, file_id: str) -> dict[str, Any]:
-    """POST /api/v1/knowledge/{id}/file/add — runs process_file against the
-    KB collection, which is what actually triggers the RAG embedding into the
-    knowledge base collection."""
-    return client.post(
-        f"/api/v1/knowledge/{knowledge_id}/file/add",
-        json={"file_id": file_id},
-        timeout=max(300.0, PROCESS_TIMEOUT),
-    )
 
 
 def _content_to_text(content: Any) -> str:
@@ -221,103 +203,25 @@ def _content_to_text(content: Any) -> str:
 # FastMCP server + tools
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("openwebui-kb")
+mcp = FastMCP("openwebui-direct-files")
 
 
 @mcp.tool()
-def create_knowledge_base(name: str, description: str = "") -> str:
-    """Create a new Open WebUI knowledge base (vector collection).
+def download_file(url: str, wait: bool = True) -> str:
+    """Download a file (PDF, doc, etc.) and upload it directly to Open WebUI.
 
-    Call this when you need a place to store and later RAG-query documents
-    (PDFs, large text files, ...). Returns a JSON object with the KB's id,
-    which you then pass to download_and_index / process_web_url /
-    query_knowledge_base. If a KB with the same name already exists, the
-    response tells you so — use search_knowledge_bases to find its id.
-    """
-    try:
-        kb = client.post(
-            "/api/v1/knowledge/create",
-            json={"name": name, "description": description, "access_grants": []},
-        )
-        return json.dumps(
-            {
-                "ok": True,
-                "knowledge_base": {
-                    "id": kb.get("id"),
-                    "name": kb.get("name"),
-                    "description": kb.get("description"),
-                },
-                "hint": "Use this id with download_and_index, process_web_url, or query_knowledge_base.",
-            },
-            ensure_ascii=False,
-        )
-    except Exception as exc:
-        if "exists" in str(exc).lower() or "already" in str(exc).lower():
-            return json.dumps(
-                {"ok": False, "error": "A knowledge base with this name already exists.",
-                 "hint": "Call search_knowledge_bases(query=<name>) to get its id instead of creating a duplicate."},
-                ensure_ascii=False,
-            )
-        raise
-
-
-@mcp.tool()
-def search_knowledge_bases(query: str = "", page: int = 1) -> str:
-    """Search your Open WebUI knowledge bases by name/description.
-
-    Use this to find the id of an existing knowledge base before querying or
-    adding documents to it, so you don't create duplicates.
-    """
-    data = client.get("/api/v1/knowledge/search", params={"query": query or None, "page": page})
-    items = [
-        {"id": kb.get("id"), "name": kb.get("name"), "description": kb.get("description", "")}
-        for kb in (data.get("items") or [])
-    ]
-    return json.dumps(
-        {"ok": True, "total": data.get("total", len(items)), "knowledge_bases": items},
-        ensure_ascii=False,
-        default=str,
-    )
-
-
-@mcp.tool()
-def download_and_index(url: str, knowledge_id: Optional[str] = None,
-                       knowledge_name: Optional[str] = None,
-                       wait: bool = True) -> str:
-    """Download a file from a URL and run it through Open WebUI's RAG pipeline.
-
-    Use this instead of fetching big or binary documents (PDFs, DOCX, large
-    reports, code archives) directly — those would overflow the context
-    window. The file is streamed to disk (never into the conversation),
-    uploaded to Open WebUI with process=true, the server waits until
-    embedding completes, and the file is then added to the target knowledge
-    base, which triggers the RAG pipeline for the KB collection.
-
-    Provide either knowledge_id (an existing KB) or knowledge_name (creates a
-    new KB). Set wait=false to skip blocking on embedding (you can still
-    query later once processing finishes).
+    Use this instead of fetching big documents into the context window.
+    The file is processed and you will receive a file_id, which you can
+    pass directly to query_documents.
     """
     if not url:
         raise Exception("url is required")
-    kb_id = knowledge_id
-    kb_name_used = None
-    if not kb_id:
-        kb_name_used = knowledge_name or extract_filename(url)
-        kb = client.post(
-            "/api/v1/knowledge/create",
-            json={"name": kb_name_used, "description": f"Auto-created by openwebui-kb-mcp from {url}",
-                  "access_grants": []},
-        )
-        kb_id = kb.get("id")
-        if not kb_id:
-            raise Exception(f"Knowledge base creation returned no id: {kb}")
 
     tmp_path, filename, size = download_to_disk(url)
     try:
         metadata = {
-            "knowledge_id": kb_id,
             "process": True,
-            "source": "openwebui-kb-mcp",
+            "source": "openwebui-mcp",
             "source_url": url,
         }
         mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -336,32 +240,14 @@ def download_and_index(url: str, knowledge_id: Optional[str] = None,
         if wait:
             processing = wait_for_file_processing(file_id)
 
-        added = False
-        error: Optional[str] = None
-        if wait and processing.get("status") == "completed":
-            try:
-                add_file_to_knowledge(kb_id, file_id)
-                added = True
-            except Exception as exc:
-                error = str(exc)
-
         return json.dumps(
             {
                 "ok": True,
                 "filename": filename,
                 "size_bytes": size,
                 "file_id": file_id,
-                "knowledge_id": kb_id,
-                "knowledge_name": kb_name_used,
                 "processing": processing,
-                "added_to_knowledge_base": added,
-                "error": error,
-                "hint": (
-                    "Ready: call query_knowledge_base with knowledge_id to ask questions about this document."
-                    if added
-                    else "File is still processing in the background. Re-call this tool's follow-up by calling "
-                    "list_knowledge_files, or query once a minute or two."
-                ),
+                "hint": "Ready: call query_documents with file_ids=[\"" + file_id + "\"] to ask questions.",
             },
             ensure_ascii=False,
             default=str,
@@ -374,37 +260,19 @@ def download_and_index(url: str, knowledge_id: Optional[str] = None,
 
 
 @mcp.tool()
-def process_web_url(url: str, knowledge_id: Optional[str] = None,
-                    knowledge_name: Optional[str] = None,
-                    overwrite: bool = False) -> str:
-    """Ingest a web page directly into an Open WebUI knowledge base.
+def process_web_url(url: str) -> str:
+    """Ingest a web page directly into Open WebUI.
 
-    Open WebUI fetches and parses the URL server-side (POST /api/v1/retrieval/
-    process/web) — nothing is downloaded into the conversation. Best for HTML
-    documentation pages. For PDFs and other binary files use
-    download_and_index instead. Provide knowledge_id, or knowledge_name to
-    create a new KB. overwrite=true replaces the collection's existing
-    vectors with just this URL's content.
+    Best for HTML documentation. Returns a collection_name which you
+    can pass to query_documents.
     """
     if not url:
         raise Exception("url is required")
-    kb_id = knowledge_id
-    kb_name_used = None
-    if not kb_id:
-        kb_name_used = knowledge_name or f"web:{urlparse(url).netloc}/{urlparse(url).path}"
-        kb = client.post(
-            "/api/v1/knowledge/create",
-            json={"name": kb_name_used, "description": f"Auto-created by openwebui-kb-mcp from {url}",
-                  "access_grants": []},
-        )
-        kb_id = kb.get("id")
-        if not kb_id:
-            raise Exception(f"Knowledge base creation returned no id: {kb}")
 
-    collection_name = f"web:{uuid.uuid4().hex[:8]}:{kb_id}"
+    collection_name = f"web:{uuid.uuid4().hex[:8]}"
     result = client.post(
         "/api/v1/retrieval/process/web",
-        params={"process": "true", "overwrite": "true" if overwrite else "false"},
+        params={"process": "true", "overwrite": "true"},
         json={"url": url, "collection_name": collection_name},
         timeout=300.0,
     )
@@ -412,14 +280,9 @@ def process_web_url(url: str, knowledge_id: Optional[str] = None,
         {
             "ok": True,
             "url": url,
-            "knowledge_id": kb_id,
-            "knowledge_name": kb_name_used,
             "collection_name": collection_name,
             "upstream_result": {k: v for k, v in (result or {}).items() if k in ("count", "documents", "success", "error")},
-            "hint": (
-                "If upstream_result has no chunk count, the page may still be processing or may be a binary file. "
-                "Check with list_knowledge_files; for PDFs re-run with download_and_index."
-            ),
+            "hint": "Ready: call query_documents with collection_names=[\"" + collection_name + "\"] to ask questions.",
         },
         ensure_ascii=False,
         default=str,
@@ -427,51 +290,31 @@ def process_web_url(url: str, knowledge_id: Optional[str] = None,
 
 
 @mcp.tool()
-def list_knowledge_files(knowledge_id: str, page: int = 1) -> str:
-    """List files currently in a knowledge base, with processing status.
+def query_documents(question: str, file_ids: list[str] = [], collection_names: list[str] = [], model: Optional[str] = None) -> str:
+    """Ask a question, answered by RAG over the provided files or web collections.
 
-    Useful to verify a file finished being added after download_and_index /
-    process_web_url, and to see file ids.
-    """
-    data = client.get(f"/api/v1/knowledge/{knowledge_id}/files", params={"page": page})
-    items = []
-    for f in data.get("items") or []:
-        items.append(
-            {
-                "id": f.get("id"),
-                "filename": f.get("filename"),
-                "size": f.get("size"),
-                "content_length": len((f.get("data") or {}).get("content") or "") if isinstance(f.get("data"), dict) else None,
-            }
-        )
-    return json.dumps(
-        {"ok": True, "knowledge_id": knowledge_id, "total": data.get("total", len(items)), "files": items},
-        ensure_ascii=False,
-        default=str,
-    )
-
-
-@mcp.tool()
-def query_knowledge_base(question: str, knowledge_id: str, model: Optional[str] = None) -> str:
-    """Ask a question, answered by RAG over an Open WebUI knowledge base.
-
-    Runs POST /api/chat/completions with files=[{type:"collection",
-    id:knowledge_id}], so the model grounds its answer in the KB's embedded
-    chunks — the whole point of using this MCP instead of fetching big files
-    into the context window. Pass model to override OPENWEBUI_DEFAULT_MODEL.
-    Returns the assistant's answer text.
+    Runs POST /api/chat/completions so the model grounds its answer in
+    the provided files. You must provide at least one file_id or collection_name.
     """
     if not question:
         raise Exception("question is required")
-    if not knowledge_id:
-        raise Exception("knowledge_id is required (see search_knowledge_bases / create_knowledge_base)")
+    if not file_ids and not collection_names:
+        raise Exception("You must provide at least one file_id or collection_name.")
+        
     model = model or DEFAULT_MODEL
     if not model:
         raise Exception("No model specified and OPENWEBUI_DEFAULT_MODEL is not set. Pass model=... or set the env var.")
+        
+    files = []
+    for fid in file_ids:
+        files.append({"type": "file", "id": fid})
+    for cid in collection_names:
+        files.append({"type": "collection", "id": cid})
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": question}],
-        "files": [{"type": "collection", "id": knowledge_id}],
+        "files": files,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
@@ -501,17 +344,10 @@ def query_knowledge_base(question: str, knowledge_id: str, model: Optional[str] 
                         chunks.append(text)
     answer = "".join(chunks).strip()
     return json.dumps(
-        {"ok": bool(answer), "answer": answer, "usage": usage, "knowledge_id": knowledge_id, "model": model},
+        {"ok": bool(answer), "answer": answer, "usage": usage, "model": model},
         ensure_ascii=False,
         default=str,
     )
-
-
-@mcp.tool()
-def delete_knowledge_base(knowledge_id: str) -> str:
-    """Delete a knowledge base and its vector collection (irreversible)."""
-    data = client.request("DELETE", f"/api/v1/knowledge/{knowledge_id}/delete").json()
-    return json.dumps({"ok": bool(data), "knowledge_id": knowledge_id}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
