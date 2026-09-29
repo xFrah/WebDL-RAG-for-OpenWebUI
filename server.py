@@ -4,14 +4,9 @@ openwebui-kb-mcp — an MCP tool server that routes big-document work through
 Open WebUI's RAG pipeline without the overhead of Knowledge Bases.
 
 Workflow it gives the LLM:
-  1. download_file      -> download URL to disk (streamed, size-capped),
-                           POST /api/v1/files/ (process=true)
-                           poll GET /api/v1/files/{id}/process/status
-                           (Returns a file_id)
-  2. process_web_url    -> POST /api/v1/retrieval/process/web (no download)
-                           (Returns a collection_name)
-  3. query_documents    -> POST /api/chat/completions with
-                           files=[{type:"file", id:<file id>}, {type:"collection", id:<collection name>}]
+  1. fetch_url          -> Fetches URL content or downloads/indexes large files.
+                           (Returns text, a file_id, or a collection_name)
+  2. semantic_search    -> Queries the indexed files or collections in Open WebUI.
 
 Config (environment variables, or .env file next to this script):
   OPENWEBUI_URL           base URL, e.g. http://localhost:3000
@@ -209,102 +204,6 @@ mcp = FastMCP("openwebui-direct-files")
 
 
 @mcp.tool()
-def download_file(url: str, wait: bool = True) -> str:
-    """Download a file (PDF, doc, etc.) and upload it directly to Open WebUI.
-
-    Use this instead of fetching big documents into the context window.
-    The file is processed and you will receive a file_id, which you can
-    pass directly to semantic_search.
-    """
-    if not url:
-        raise Exception("url is required")
-
-    tmp_path, filename, size, ctype = download_to_disk(url)
-    try:
-        metadata = {
-            "process": True,
-            "source": "openwebui-mcp",
-            "source_url": url,
-        }
-        mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        
-        # If filename lacks the correct extension for its mime type, append it.
-        # e.g., '1706.03762' has a dot, but '03762' is not '.pdf'.
-        if mime:
-            ext = mimetypes.guess_extension(mime)
-            if mime == "application/pdf":
-                ext = ".pdf"
-                
-            if ext and not filename.lower().endswith(ext.lower()):
-                filename += ext
-
-        with open(tmp_path, "rb") as fh:
-            payload = client.post(
-                "/api/v1/files/",
-                files={"file": (filename, fh, mime), "metadata": (None, json.dumps(metadata), "application/json")},
-                params={"process": "true", "process_in_background": "false"},
-                timeout=600.0,
-            )
-        file_id = payload.get("id")
-        if not file_id:
-            raise Exception(f"File upload returned no id: {payload}")
-
-        processing = {"file_id": file_id, "status": "pending"}
-        if wait:
-            processing = wait_for_file_processing(file_id)
-
-        return json.dumps(
-            {
-                "ok": True,
-                "filename": filename,
-                "size_bytes": size,
-                "file_id": file_id,
-                "processing": processing,
-                "hint": "Ready: call semantic_search with file_ids=[\"" + file_id + "\"] to search it.",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-@mcp.tool()
-def process_web_url(url: str) -> str:
-    """Ingest a web page directly into Open WebUI.
-
-    Best for HTML documentation. Returns a collection_name which you
-    can pass to semantic_search.
-    """
-    if not url:
-        raise Exception("url is required")
-
-    result = client.post(
-        "/api/v1/retrieval/process/web",
-        params={"process": "true", "overwrite": "true"},
-        json={"url": url},
-        timeout=300.0,
-    )
-    
-    collection_name = result.get("collection_name")
-    
-    return json.dumps(
-        {
-            "ok": True,
-            "url": url,
-            "collection_name": collection_name,
-            "upstream_result": {k: v for k, v in (result or {}).items() if k in ("count", "documents", "success", "error")},
-            "hint": "Ready: call semantic_search with collection_names=[\"" + collection_name + "\"] to search it.",
-        },
-        ensure_ascii=False,
-        default=str,
-    )
-
-
-@mcp.tool()
 def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
     """Perform a pure semantic search on the Open WebUI vector database.
     
@@ -488,8 +387,8 @@ def fetch_url(url: str) -> str:
                         if "JSON detected" in str(e): raise e
                 try:
                     index_resp = client.post(
-                        "/api/v1/retrieval/process/url",
-                        params={"process": "true"},
+                        "/api/v1/retrieval/process/web",
+                        params={"process": "true", "overwrite": "true"},
                         json={"url": url},
                         timeout=120.0
                     )

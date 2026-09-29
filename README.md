@@ -9,8 +9,6 @@ By routing heavy tasks through Open WebUI, agents can index large PDFs, search t
 | Tool | What it does | Open WebUI API |
 | --- | --- | --- |
 | `fetch_url` | Fetches the text content of a URL (web page or PDF) directly. If too large, it automatically indexes the document and returns a `file_id`/`collection_name`. | `POST /api/v1/retrieval/process/url` |
-| `download_file` | Downloads a document (PDF, docx, etc.) from a URL and uploads it to Open WebUI for extraction and embedding. Returns a `file_id`. | `POST /api/v1/files/` |
-| `process_web_url` | Sends a URL to Open WebUI's native web loader to fetch and parse an HTML page into the KB directly. | `POST /api/v1/retrieval/process/web` |
 | `semantic_search` | Performs vector-based RAG search over specific `file_ids` using Open WebUI's retrieval engine. | `POST /api/v1/retrieval/query/doc` |
 | `grep_file` | Performs an exact-text regular expression search against the parsed text of an uploaded file. Perfect for finding precise code snippets. | `GET /api/v1/files/{id}/data/content` |
 | `search_web` | Searches the internet using Open WebUI's configured search backend (e.g. SearxNG, OpenSerp). | `POST /api/v1/retrieval/process/web/search` |
