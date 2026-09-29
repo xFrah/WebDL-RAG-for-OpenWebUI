@@ -107,41 +107,6 @@ class Client:
 client = Client()
 
 
-def extract_filename(url: str) -> str:
-    name = os.path.basename(urlparse(url).path)
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "download"
-    return name
-
-
-def download_to_disk(url: str) -> tuple[str, str, int, str]:
-    """Stream a URL to a temp file. Returns (path, filename, size_bytes, content_type)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise Exception(f"Only http/https URLs are supported, got: {url}")
-    filename = extract_filename(url)
-    fd, tmp_path = tempfile.mkstemp(prefix="owui-kb-", suffix=os.path.splitext(filename)[1] or ".bin")
-    os.close(fd)
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    size = 0
-    content_type = ""
-    with httpx.Client(follow_redirects=True, timeout=httpx.Timeout(30.0, read=600.0)) as http:
-        with http.stream("GET", url, headers=headers) as resp:
-            if resp.status_code >= 400:
-                raise Exception(f"Download failed with HTTP {resp.status_code} for {url}")
-            content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            for chunk in resp.iter_bytes(1024 * 256):
-                size += len(chunk)
-                if size > MAX_FILE_BYTES:
-                    raise Exception(
-                        f"File exceeds KB_MAX_FILE_BYTES ({MAX_FILE_BYTES}); aborting download of {url}"
-                    )
-                with open(tmp_path, "ab") as fh:
-                    fh.write(chunk)
-    if size == 0:
-        raise Exception(f"Download of {url} produced an empty file.")
-    return tmp_path, filename, size, content_type
-
-
 def wait_for_file_processing(file_id: str, timeout: int | None = None) -> dict[str, Any]:
     """Poll until RAG processing (extraction + embedding) is done.
 
@@ -331,25 +296,6 @@ def search_web(query: str) -> str:
             return json.dumps({"ok": False, "error": "Search engine returned 0 results. Please try a different query."}, ensure_ascii=False)
         return json.dumps({"ok": False, "error": f"Web search failed: {e}"}, ensure_ascii=False)
 
-def format_json_for_rag(data):
-    """Flattens JSON into a Markdown-friendly format for better semantic chunking."""
-    if isinstance(data, list):
-        return "\n\n".join([format_json_for_rag(item) for item in data])
-    if isinstance(data, dict):
-        lines = []
-        for k, v in data.items():
-            if isinstance(v, (dict, list)):
-                sub_str = json.dumps(v, ensure_ascii=False)
-                if len(sub_str) < 150:
-                    lines.append(f"{k}: {sub_str}")
-                else:
-                    lines.append(f"### {k}")
-                    lines.append(format_json_for_rag(v))
-            else:
-                lines.append(f"{k}: {v}")
-        return "\n".join(lines)
-    return str(data)
-
 @mcp.tool()
 def fetch_url(url: str) -> str:
     """Fetch the text content of a URL (web page or PDF).
@@ -359,16 +305,18 @@ def fetch_url(url: str) -> str:
     if not url:
         raise Exception("url is required")
 
-    # 1. First, attempt to let Open WebUI's native web loader fetch it (bypasses bot protection for sites like Reuters)
     try:
-        owui_resp = client.post(
+        # First, attempt to fetch the text without processing
+        resp = client.post(
             "/api/v1/retrieval/process/url",
             params={"process": "false"},
             json={"url": url},
             timeout=120.0
         )
-        if owui_resp.get("type") in ("web", "youtube") and owui_resp.get("content"):
-            text = owui_resp.get("content")
+        
+        # If it's a web page or youtube video and returned content, try to return it directly
+        if resp.get("type") in ("web", "youtube") and resp.get("content"):
+            text = resp.get("content")
             
             try:
                 import tiktoken
@@ -377,180 +325,50 @@ def fetch_url(url: str) -> str:
             except ImportError:
                 token_count = len(text) // 4
                 
-            if token_count > 8000:
-                # Detect JSON and force fallback so it can be formatted as Markdown
-                if text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]")):
-                    try:
-                        json.loads(text) # Just to verify it's valid
-                        raise Exception("JSON detected. Falling back to local upload to flatten it.")
-                    except Exception as e:
-                        if "JSON detected" in str(e): raise e
-                try:
-                    index_resp = client.post(
-                        "/api/v1/retrieval/process/web",
-                        params={"process": "true", "overwrite": "true"},
-                        json={"url": url},
-                        timeout=120.0
-                    )
-                    collection_name = index_resp.get("collection_name")
-                    return json.dumps({
-                        "ok": True,
-                        "url": url,
-                        "token_count": token_count,
-                        "indexed": True,
-                        "collection_name": collection_name,
-                        "hint": f"Document was too large ({token_count} tokens) and was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
-                    }, ensure_ascii=False)
-                except Exception as index_e:
-                    return json.dumps({
-                        "ok": True,
-                        "error": f"Document is too large to read directly ({token_count} tokens) and automatic indexing failed: {index_e}"
-                    }, ensure_ascii=False)
-                
+            if token_count <= 8000:
+                return json.dumps({
+                    "ok": True,
+                    "url": url,
+                    "token_count": token_count,
+                    "content": text[:30000]
+                }, ensure_ascii=False)
+
+        # Otherwise (too big, or it's a file), let Open WebUI fully process it
+        index_resp = client.post(
+            "/api/v1/retrieval/process/url",
+            params={"process": "true"},
+            json={"url": url},
+            timeout=300.0
+        )
+        
+        item_type = index_resp.get("type")
+        
+        if item_type in ("web", "youtube"):
+            collection_name = index_resp.get("collection_name")
             return json.dumps({
                 "ok": True,
                 "url": url,
-                "token_count": token_count,
-                "content": text[:30000]
+                "indexed": True,
+                "collection_name": collection_name,
+                "hint": f"Document was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
             }, ensure_ascii=False)
-    except Exception as e:
-        # If it fails or it's a file, we fall back to local download
-        pass
-
-    # 2. Fallback for PDFs or if Open WebUI native fetch failed
-    try:
-        tmp_path, filename, size, ctype = download_to_disk(url)
-    except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg:
-            hint = "The URL does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL, or try fetching the parent directory."
-        elif "401" in error_msg or "403" in error_msg or "503" in error_msg:
-            hint = "The website is aggressively blocking standard HTTP bots (like Cloudflare). Please use `search_web` instead to read alternative sources."
         else:
-            hint = "Failed to download the file. Try using `search_web` to read alternative sources."
-            
-        return json.dumps({
-            "ok": True,
-            "error": error_msg,
-            "hint": hint
-        }, ensure_ascii=False)
-    try:
-        mime = ctype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        text = ""
-
-        if mime == "application/pdf":
-            try:
-                import pypdf
-                reader = pypdf.PdfReader(tmp_path)
-                for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-            except Exception as e:
-                return json.dumps({"ok": True, "error": f"Failed to extract PDF text: {e}"})
-        elif mime in ["text/html", "application/xhtml+xml"]:
-            try:
-                from bs4 import BeautifulSoup
-                with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
-                    soup = BeautifulSoup(f.read(), "html.parser")
-                    for script in soup(["script", "style"]):
-                        script.decompose()
-                    text = soup.get_text(separator="\n", strip=True)
-            except Exception as e:
-                return json.dumps({"ok": True, "error": f"Failed to parse HTML: {e}"})
-        else:
-            try:
-                with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
-                    text = f.read()
-            except Exception:
-                text = ""
-
-        char_count = len(text)
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding("cl100k_base")
-            token_count = len(encoding.encode(text, disallowed_special=()))
-        except ImportError:
-            token_count = char_count // 4
-
-        # If it's a large JSON, format it to Markdown and overwrite the file before indexing
-        if token_count > 8000 and (text.strip().startswith("{") and text.strip().endswith("}") or (text.strip().startswith("[") and text.strip().endswith("]"))):
-            try:
-                data = json.loads(text)
-                text = format_json_for_rag(data)
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(text)
-                if not filename.endswith(".md"):
-                    filename = filename + ".md"
-                mime = "text/markdown"
-                # Recalculate token count for the new formatted text
-                try:
-                    token_count = len(encoding.encode(text, disallowed_special=()))
-                except:
-                    token_count = len(text) // 4
-            except Exception:
-                pass
-
-        char_count = len(text)
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding("cl100k_base")
-            token_count = len(encoding.encode(text, disallowed_special=()))
-        except ImportError:
-            token_count = char_count // 4
-
-        if token_count > 8000:
-            try:
-                # If filename lacks the correct extension for its mime type, append it.
-                if mime:
-                    ext = mimetypes.guess_extension(mime)
-                    if mime == "application/pdf":
-                        ext = ".pdf"
-                        
-                    if ext and not filename.lower().endswith(ext.lower()):
-                        filename += ext
-                        
-                metadata = {"process": True, "source": "openwebui-mcp", "source_url": url}
-                with open(tmp_path, "rb") as fh:
-                    payload = client.post(
-                        "/api/v1/files/",
-                        files={"file": (filename, fh, mime), "metadata": (None, json.dumps(metadata), "application/json")},
-                        params={"process": "true", "process_in_background": "false"},
-                        timeout=600.0,
-                    )
-                file_id = payload.get("id")
-                if file_id:
-                    wait_for_file_processing(file_id)
-                    return json.dumps({
-                        "ok": True,
-                        "url": url,
-                        "token_count": token_count,
-                        "indexed": True,
-                        "file_id": file_id,
-                        "hint": f"Document was too large ({token_count} tokens) and was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
-                    }, ensure_ascii=False)
-            except Exception as index_e:
+            file_data = index_resp.get("file", {})
+            file_id = file_data.get("id")
+            if file_id:
+                wait_for_file_processing(file_id)
                 return json.dumps({
                     "ok": True,
-                    "error": f"Document is too large to read directly ({token_count} tokens) and automatic indexing failed: {index_e}"
+                    "url": url,
+                    "indexed": True,
+                    "file_id": file_id,
+                    "hint": f"Document was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
                 }, ensure_ascii=False)
-
-        return json.dumps(
-            {
-                "ok": True,
-                "url": url,
-                "filename": filename,
-                "token_count": token_count,
-                "content": text[:30000] # extra safety cap
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+            else:
+                return json.dumps({"ok": False, "error": f"Failed to get file_id from response: {index_resp}"}, ensure_ascii=False)
+                
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Fetch failed: {e}"}, ensure_ascii=False)
 
 
 @mcp.tool()
