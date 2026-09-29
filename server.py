@@ -441,7 +441,23 @@ def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_c
                 match_block = []
                 for j in range(start, end):
                     prefix = "> " if j == i else "  "
-                    match_block.append(f"{j+1:04d} {prefix} {lines[j]}")
+                    line_content = lines[j]
+                    
+                    # Truncate extremely long lines (e.g. from minified JSON)
+                    if len(line_content) > 300:
+                        if j == i:
+                            # Try to show context around the actual match
+                            m = pattern.search(line_content)
+                            if m:
+                                m_start = max(0, m.start() - 150)
+                                m_end = min(len(line_content), m.end() + 150)
+                                line_content = ("..." if m_start > 0 else "") + line_content[m_start:m_end] + ("..." if m_end < len(line_content) else "")
+                            else:
+                                line_content = line_content[:300] + "..."
+                        else:
+                            line_content = line_content[:300] + "..."
+                            
+                    match_block.append(f"{j+1:04d} {prefix} {line_content}")
                     
                 results.append("\n".join(match_block))
                 
@@ -460,6 +476,9 @@ def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_c
             
         output = f"Found {matches_count} matches in file {file_id}:\n\n" + "\n---\n".join(results) + cap_msg
         
+        if len(output) > 20000:
+            output = output[:20000] + "\n\n...[OUTPUT TRUNCATED DUE TO EXTREME LENGTH]..."
+            
         return json.dumps({
             "ok": True,
             "matches": matches_count,
