@@ -170,15 +170,21 @@ mcp = FastMCP("openwebui-direct-files")
 
 @mcp.tool()
 def semantic_search(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
-    """Perform a pure semantic search on the Open WebUI vector database.
+    """Perform a pure semantic search on specific documents within the Open WebUI vector database.
+    
+    This is NOT a global web search or global database search. You MUST provide at least one
+    `file_id` or `collection_name` (obtained via the `fetch_url` tool) to scope your search.
+    If you want to search the internet, use the `search_web` tool instead.
     
     Returns the raw text chunks matching the query. Bypasses the internal LLM completely.
-    Since Hybrid Search (BM25 + Vector) is enabled, you can use natural language OR keyword-based searches!
     """
     if not query:
-        raise Exception("query is required")
+        return json.dumps({"ok": False, "error": "query is required"}, ensure_ascii=False)
     if not file_ids and not collection_names:
-        raise Exception("You must provide at least one file_id or collection_name.")
+        return json.dumps({
+            "ok": False, 
+            "error": "You must provide at least one file_id or collection_name to search. This tool does not support global search. If you are trying to search the internet, please use the `search_web` tool instead."
+        }, ensure_ascii=False)
 
     all_chunks = []
     
@@ -372,12 +378,10 @@ def fetch_url(url: str) -> str:
 
 
 @mcp.tool()
-def grep_file(file_id: str, query: str, is_regex: bool = False, ignore_case: bool = True, context_lines: int = 2) -> str:
+def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_case: bool = True, context_lines: int = 2) -> str:
     """Exact-text search (grep) on a file stored in Open WebUI.
     
-    This works by downloading the extracted text from Open WebUI and searching it.
-    Use this for precise exact-match searches (e.g. searching for a specific code identifier) 
-    that semantic search struggles with.
+    Use this for precise exact-match searches that semantic search struggles with.
     
     Args:
         file_id: The ID of the file in Open WebUI (e.g., from download_file or search).
