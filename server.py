@@ -306,7 +306,7 @@ def search_web(query: str) -> str:
 def fetch_url(url: str) -> str:
     """Fetch the text content of a URL (web page or PDF).
     If the document is too large (over 8,000 tokens), it will automatically index the document
-    and return a collection_name or file_id which you can pass to `semantic_search`.
+    and return a collection_name or file_id which you can pass to `query_fetched_file`.
     """
     if not url:
         raise Exception("url is required")
@@ -333,6 +333,12 @@ def fetch_url(url: str) -> str:
         if resp.get("type") in ("web", "youtube") and resp.get("content"):
             text = resp.get("content")
             
+            try:
+                parsed = json.loads(text)
+                text = json.dumps(parsed, indent=2)
+            except Exception:
+                pass
+                
             try:
                 import tiktoken
                 encoding = tiktoken.get_encoding("cl100k_base")
@@ -419,6 +425,13 @@ def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_c
             text = content["data"].get("content", "")
         else:
             text = str(content)
+            
+        # Try to prettify JSON to break up minified single-line responses
+        try:
+            parsed = json.loads(text)
+            text = json.dumps(parsed, indent=2)
+        except Exception:
+            pass
             
         lines = text.split("\n")
         flags = re.IGNORECASE if ignore_case else 0
