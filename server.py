@@ -315,6 +315,11 @@ def fetch_url(url: str) -> str:
         # Quick check to prevent Open WebUI from swallowing 404s into generic 400s
         with httpx.Client(follow_redirects=True, timeout=5.0) as http:
             head_resp = http.head(url)
+            
+            # Automatically update the URL if we were redirected (fixes Open WebUI 301 scraping bugs)
+            if str(head_resp.url) != url:
+                url = str(head_resp.url)
+                
             if head_resp.status_code == 404:
                 return json.dumps({"ok": False, "error": f"The URL {url} does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL."}, ensure_ascii=False)
     except Exception:
@@ -478,7 +483,7 @@ def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_c
             return json.dumps({
                 "ok": True,
                 "matches": 0,
-                "results": f"No matches found for '{query}' in file {file_id}."
+                "results": f"No matches found for '{query}' in file {file_id}. Note: grep is line-based. Your regex must match within a single line."
             })
             
         # Limit to first 20 matches to avoid blowing up context window
