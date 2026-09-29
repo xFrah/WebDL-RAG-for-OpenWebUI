@@ -312,6 +312,15 @@ def fetch_url(url: str) -> str:
         raise Exception("url is required")
 
     try:
+        # Quick check to prevent Open WebUI from swallowing 404s into generic 400s
+        with httpx.Client(follow_redirects=True, timeout=5.0) as http:
+            head_resp = http.head(url)
+            if head_resp.status_code == 404:
+                return json.dumps({"ok": False, "error": f"The URL {url} does not exist (404 Not Found). You likely guessed a broken link. Please use `search_web` to find the correct URL."}, ensure_ascii=False)
+    except Exception:
+        pass
+
+    try:
         # First, attempt to fetch the text without processing
         resp = client.post(
             "/api/v1/retrieval/process/url",
@@ -374,6 +383,9 @@ def fetch_url(url: str) -> str:
                 return json.dumps({"ok": False, "error": f"Failed to get file_id from response: {index_resp}"}, ensure_ascii=False)
                 
     except Exception as e:
+        error_msg = str(e)
+        if "400" in error_msg and "Error processing URL" in error_msg:
+             return json.dumps({"ok": False, "error": f"Open WebUI failed to process the URL. Since we know it's not a 404, the site is likely blocking access (e.g. 403 Forbidden, bot protection) or the file format is unsupported. Please use `search_web` to find alternative sources."}, ensure_ascii=False)
         return json.dumps({"ok": False, "error": f"Fetch failed: {e}"}, ensure_ascii=False)
 
 
