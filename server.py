@@ -399,7 +399,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "collection_name": collection_name,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed.\nSource URL: {url}\nCall `semantic_search` with collection_names=[\"{collection_name}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens) and was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
                     }, ensure_ascii=False)
                 except Exception as index_e:
                     return json.dumps({
@@ -527,7 +527,7 @@ def fetch_url(url: str) -> str:
                         "token_count": token_count,
                         "indexed": True,
                         "file_id": file_id,
-                        "hint": f"Document was too large ({token_count} tokens). It was automatically indexed.\nSource URL: {url}\nCall `semantic_search` with file_ids=[\"{file_id}\"] to search it."
+                        "hint": f"Document was too large ({token_count} tokens) and was automatically indexed.\nYou MUST now call the `semantic_search` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
                     }, ensure_ascii=False)
             except Exception as index_e:
                 return json.dumps({
