@@ -170,13 +170,14 @@ mcp = FastMCP("openwebui-direct-files")
 
 @mcp.tool()
 def query_fetched_file(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
-    """Perform a pure semantic search on specific documents within the Open WebUI vector database.
+    """Perform a pure semantic search on specific documents already indexed in the Open WebUI vector database (via fetch_url tool).
+    You MUST provide at least one `file_id` or `collection_name` (obtained via the `fetch_url` tool).
     
-    This is NOT a global web search or global database search. You MUST provide at least one
-    `file_id` or `collection_name` (obtained via the `fetch_url` tool) to scope your search.
-    If you want to search the internet, use the `search_web` tool instead.
+    WARNING: Semantic search (RAG) performs poorly on structured data like JSON, code files, 
+    or directory listings. If you are searching for a specific filename, variable, 
+    or code snippet, you should use `grep_fetched_file` instead of this tool.
     
-    Returns the raw text chunks matching the query. Bypasses the internal LLM completely.
+    Returns the raw text chunks matching the query.
     """
     if not query:
         return json.dumps({"ok": False, "error": "query is required"}, ensure_ascii=False)
@@ -371,24 +372,32 @@ def fetch_url(url: str) -> str:
         
         if item_type in ("web", "youtube"):
             collection_name = index_resp.get("collection_name")
+            hint = f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
+            if "api.github.com" in url or url.endswith(".json"):
+                hint += "\nNOTE: This looks like structured JSON or a directory listing. Semantic search performs poorly on JSON. Consider using `grep_fetched_file` instead to find specific keys or filenames."
+                
             return json.dumps({
                 "ok": True,
                 "url": url,
                 "indexed": True,
                 "collection_name": collection_name,
-                "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
+                "hint": hint
             }, ensure_ascii=False)
         else:
             file_data = index_resp.get("file", {})
             file_id = file_data.get("id")
             if file_id:
                 wait_for_file_processing(file_id)
+                hint = f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
+                if "api.github.com" in url or url.endswith(".json"):
+                    hint += "\nNOTE: This looks like structured JSON or a directory listing. Semantic search performs poorly on JSON. Consider using `grep_fetched_file` instead to find specific keys or filenames."
+                
                 return json.dumps({
                     "ok": True,
                     "url": url,
                     "indexed": True,
                     "file_id": file_id,
-                    "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
+                    "hint": hint
                 }, ensure_ascii=False)
             else:
                 return json.dumps({"ok": False, "error": f"Failed to get file_id from response: {index_resp}"}, ensure_ascii=False)
