@@ -169,7 +169,7 @@ mcp = FastMCP("openwebui-direct-files")
 
 
 @mcp.tool()
-def query_fetched_context(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
+def query_fetched_file(query: str, file_ids: list[str] = [], collection_names: list[str] = [], top_k: int = 10) -> str:
     """Perform a pure semantic search on specific documents within the Open WebUI vector database.
     
     This is NOT a global web search or global database search. You MUST provide at least one
@@ -365,7 +365,7 @@ def fetch_url(url: str) -> str:
                 "url": url,
                 "indexed": True,
                 "collection_name": collection_name,
-                "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_context` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
+                "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `collection_names=[\"{collection_name}\"]` to search its contents."
             }, ensure_ascii=False)
         else:
             file_data = index_resp.get("file", {})
@@ -377,7 +377,7 @@ def fetch_url(url: str) -> str:
                     "url": url,
                     "indexed": True,
                     "file_id": file_id,
-                    "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_context` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
+                    "hint": f"Document was automatically indexed.\nYou MUST now call the `query_fetched_file` tool and pass exactly `file_ids=[\"{file_id}\"]` to search its contents."
                 }, ensure_ascii=False)
             else:
                 return json.dumps({"ok": False, "error": f"Failed to get file_id from response: {index_resp}"}, ensure_ascii=False)
