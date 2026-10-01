@@ -405,7 +405,7 @@ def fetch_url(url: str) -> str:
     except Exception as e:
         error_msg = str(e)
         if "400" in error_msg and "Error processing URL" in error_msg:
-             return json.dumps({"ok": False, "error": f"Open WebUI failed to process the URL. Since we know it's not a 404, the site is likely blocking access (e.g. 403 Forbidden, bot protection) or the file format is unsupported. Please use `search_web` to find alternative sources."}, ensure_ascii=False)
+             return json.dumps({"ok": False, "error": f"Open WebUI failed to process the URL. Since we know it's not a 404, the site is likely blocking access (e.g. 403 Forbidden, bot protection) or the file format is unsupported. Please try using playwright, which might work, or use `search_web` to find alternative sources."}, ensure_ascii=False)
         return json.dumps({"ok": False, "error": f"Fetch failed: {e}"}, ensure_ascii=False)
 
 
@@ -514,6 +514,65 @@ def grep_fetched_file(file_id: str, query: str, is_regex: bool = False, ignore_c
         
     except Exception as e:
         return json.dumps({"ok": False, "error": f"Failed to grep file: {e}"})
+
+
+@mcp.tool()
+def read_fetched_file(file_id: str, start_line: int = 0, end_line: int = 100) -> str:
+    """Read a specific range of lines from a file stored in Open WebUI.
+    
+    Use this to read a document sequentially or retrieve a specific section by line numbers.
+    
+    Args:
+        file_id: The ID of the file in Open WebUI (e.g., from fetch_url).
+        start_line: The starting line number (0-indexed).
+        end_line: The ending line number (exclusive).
+    """
+    if not file_id:
+        return json.dumps({"ok": False, "error": "file_id is required"})
+        
+    try:
+        content = client.get(f"/api/v1/files/{file_id}/data/content")
+        
+        if not content:
+            return json.dumps({"ok": False, "error": f"File {file_id} not found or has no extracted text content."})
+            
+        if isinstance(content, dict) and "content" in content:
+            text = content["content"]
+        elif isinstance(content, dict) and "data" in content and isinstance(content["data"], dict):
+            text = content["data"].get("content", "")
+        else:
+            text = str(content)
+            
+        lines = text.split("\n")
+        total_lines = len(lines)
+        
+        start_line = max(0, start_line)
+        end_line = min(total_lines, end_line)
+        
+        if start_line >= total_lines:
+            return json.dumps({
+                "ok": True, 
+                "lines": 0,
+                "total_lines": total_lines,
+                "results": f"start_line {start_line} is beyond the end of the file (total lines: {total_lines})."
+            })
+            
+        selected_lines = lines[start_line:end_line]
+        output = "\n".join(selected_lines)
+        
+        if len(output) > 50000:
+             output = output[:50000] + "\n\n...[OUTPUT TRUNCATED DUE TO EXTREME LENGTH]..."
+             
+        return json.dumps({
+            "ok": True,
+            "start_line": start_line,
+            "end_line": end_line,
+            "total_lines": total_lines,
+            "content": output
+        })
+        
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"Failed to read file: {e}"})
 
 
 # ---------------------------------------------------------------------------
