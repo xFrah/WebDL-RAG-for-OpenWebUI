@@ -345,6 +345,9 @@ def fetch_url(url: str) -> str:
             except Exception:
                 pass
                 
+            import re
+            text = re.sub(r'\n{3,}', '\n\n', text)
+                
             try:
                 import tiktoken
                 encoding = tiktoken.get_encoding("cl100k_base")
